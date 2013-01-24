@@ -11,7 +11,7 @@ from CPAC.alff.alff import *
 from CPAC.alff.utils import *
 from CPAC.interfaces.afni import preprocess
 
-def create_alff(wf_name = 'alff_workflow'):
+def create_alff(wf_name='alff_workflow'):
 
     """
     Calculate Amplitude of low frequency oscillations(ALFF) and fractional ALFF maps
@@ -69,24 +69,29 @@ def create_alff(wf_name = 'alff_workflow'):
 
 
     Order of Commands:
-    - Filter the input file rest file( slice-time, motion corrected and nuisance regressed) ::
+    
+    - Filter the input preprocessed rest image ::
+         
         3dBandpass -prefix residual_filtered.nii.gz 
                     0.009 0.08 residual.nii.gz
                     
     - Calculate ALFF by taking the standard deviation of the filtered file ::
+        
         3dTstat -stdev 
                 -mask rest_mask.nii.gz 
                 -prefix residual_filtered_3dT.nii.gz
                 residual_filtered.nii.gz
                   
     - Calculate the standard deviation of the unfiltered file ::
+        
         3dTstat -stdev 
                 -mask rest_mask.nii.gz 
                 -prefix residual_3dT.nii.gz
                 residual.nii.gz
   
     - Calculate fALFF ::
-        3dcalc -a rest_mask.nii.gz 
+        
+	    3dcalc -a rest_mask.nii.gz 
                -b residual_filtered_3dT.nii.gz
                -c residual_3dT.nii.gz  
                -expr '(1.0*bool(a))*((1.0*b)/(1.0*c))' -float
@@ -130,12 +135,12 @@ def create_alff(wf_name = 'alff_workflow'):
     Workflow ALFF and fractional ALFF:
     
     .. image:: ../images/alff.dot.png
-        :width: 500
+        :width: 700
 
     Workflow Detailed:
 
     .. image:: ../images/alff_detailed.dot.png
-        :width: 500
+        :width: 700
 
     
     References
@@ -149,10 +154,8 @@ def create_alff(wf_name = 'alff_workflow'):
     >>> alff_w = create_alff()
     >>> alff_w.inputs.hp_input.hp = [0.01]
     >>> alff_w.inputs.lp_input.lp = [0.1]
-    >>> alff_w.get_node('hp_input').iterables = ('hp',
-                                                [0.01])
-    >>> alff_w.get_node('lp_input').iterables = ('lp',
-                                                [0.1])
+    >>> alff_w.get_node('hp_input').iterables = ('hp', [0.01])
+    >>> alff_w.get_node('lp_input').iterables = ('lp', [0.1])
     >>> alff_w.inputs.inputspec.rest_res = '/home/data/subject/func/rest_bandpassed.nii.gz'
     >>> alff_w.inputs.inputspec.rest_mask= '/home/data/subject/func/rest_mask.nii.gz' 
     >>> alff_w.run() # doctest: +SKIP
@@ -160,26 +163,26 @@ def create_alff(wf_name = 'alff_workflow'):
 
     """
 
-    wf = pe.Workflow(name= wf_name)
+    wf = pe.Workflow(name=wf_name)
     inputNode = pe.Node(util.IdentityInterface(fields=['rest_res',
                                                        'rest_mask']),
                         name='inputspec')
-    
+
     inputnode_hp = pe.Node(util.IdentityInterface(fields=['hp']),
                              name='hp_input')
 
     inputnode_lp = pe.Node(util.IdentityInterface(fields=['lp']),
                              name='lp_input')
-    
-    outputNode = pe.Node(util.IdentityInterface(fields=[ 'alff_img',
-                                                         'falff_img',
-                                                         'alff_Z_img',
-                                                         'falff_Z_img']),
+
+    outputNode = pe.Node(util.IdentityInterface(fields=['alff_img',
+                                                        'falff_img',
+                                                        'alff_Z_img',
+                                                        'falff_Z_img']),
                           name='outputspec')
-    
+
     #filtering
-    bandpass = pe.Node(interface= preprocess.ThreedBandpass(),
-                       name = 'bandpass_filtering')
+    bandpass = pe.Node(interface=preprocess.ThreedBandpass(),
+                       name='bandpass_filtering')
     bandpass.inputs.outputtype = 'NIFTI_GZ'
     bandpass.inputs.out_file = os.path.join(os.path.curdir, 'residual_filtered.nii.gz')
     wf.connect(inputnode_hp, 'hp',
@@ -187,41 +190,41 @@ def create_alff(wf_name = 'alff_workflow'):
     wf.connect(inputnode_lp, 'lp',
                  bandpass, 'ftop')
     wf.connect(inputNode, 'rest_res',
-                 bandpass, 'in_file') 
-    
-    get_option_string = pe.Node(util.Function(input_names = ['mask'],
-                                              output_names = ['option_string'],
-                                              function = get_opt_string), 
-                                name = 'get_option_string')
+                 bandpass, 'in_file')
+
+    get_option_string = pe.Node(util.Function(input_names=['mask'],
+                                              output_names=['option_string'],
+                                              function=get_opt_string),
+                                name='get_option_string')
     wf.connect(inputNode, 'rest_mask',
                  get_option_string, 'mask')
-    
+
     #standard deviation over frequency
-    stddev_fltrd = pe.Node(interface = preprocess.ThreedTstat(),
-                            name = 'stddev_fltrd')
+    stddev_fltrd = pe.Node(interface=preprocess.ThreedTstat(),
+                            name='stddev_fltrd')
     stddev_fltrd.inputs.outputtype = 'NIFTI_GZ'
     stddev_fltrd.inputs.out_file = os.path.join(os.path.curdir, 'residual_filtered_3dT.nii.gz')
     wf.connect(bandpass, 'out_file',
                stddev_fltrd, 'in_file')
     wf.connect(get_option_string, 'option_string',
-               stddev_fltrd, 'options') 
-    
+               stddev_fltrd, 'options')
+
     wf.connect(stddev_fltrd, 'out_file',
                  outputNode, 'alff_img')
-    
+
     #standard deviation of the unfiltered nuisance corrected image
-    stddev_unfltrd = pe.Node(interface = preprocess.ThreedTstat(),
-                            name = 'stddev_unfltrd')
+    stddev_unfltrd = pe.Node(interface=preprocess.ThreedTstat(),
+                            name='stddev_unfltrd')
     stddev_unfltrd.inputs.outputtype = 'NIFTI_GZ'
     stddev_unfltrd.inputs.out_file = os.path.join(os.path.curdir, 'residual_3dT.nii.gz')
     wf.connect(inputNode, 'rest_res',
                  stddev_unfltrd, 'in_file')
     wf.connect(get_option_string, 'option_string',
-                 stddev_unfltrd, 'options') 
-    
+                 stddev_unfltrd, 'options')
+
     #falff calculations
-    falff = pe.Node(interface = preprocess.Threedcalc(),
-                    name = 'falff')
+    falff = pe.Node(interface=preprocess.Threedcalc(),
+                    name='falff')
     falff.inputs.expr = '\'(1.0*bool(a))*((1.0*b)/(1.0*c))\' -float'
     falff.inputs.outputtype = 'NIFTI_GZ'
     wf.connect(inputNode, 'rest_mask',
@@ -230,35 +233,35 @@ def create_alff(wf_name = 'alff_workflow'):
                falff, 'infile_b')
     wf.connect(stddev_unfltrd, 'out_file',
                falff, 'infile_c')
-    
+
     wf.connect(falff, 'out_file',
-               outputNode, 'falff_img') 
-    
+               outputNode, 'falff_img')
+
     #alff zscore
     alff_zscore = get_zscore("alff_zscore")
-    wf.connect(stddev_fltrd, 'out_file', 
+    wf.connect(stddev_fltrd, 'out_file',
                alff_zscore, 'inputspec.input_file')
     wf.connect(inputNode, 'rest_mask',
                alff_zscore, 'inputspec.mask_file')
-    
+
     wf.connect(alff_zscore, 'outputspec.z_score_img',
                outputNode, 'alff_Z_img')
-    
+
     #falff score          
     falf_zscore = get_zscore("falf_zscore")
-    wf.connect(falff, 'out_file', 
+    wf.connect(falff, 'out_file',
                falf_zscore, 'inputspec.input_file')
     wf.connect(inputNode, 'rest_mask',
                falf_zscore, 'inputspec.mask_file')
-    
+
     wf.connect(falf_zscore, 'outputspec.z_score_img',
                outputNode, 'falff_Z_img')
-    
+
     return wf
 
 
-def get_zscore(wf_name = 'z_score'):
-    
+def get_zscore(wf_name='z_score'):
+
     """
     Workflow to calculate z-scores
     
@@ -273,7 +276,7 @@ def get_zscore(wf_name = 'z_score'):
     
     Notes
     -----
-    `Source <https://github.com/FCP-INDI/C-PAC/blob/master/CPAC/network_centrality/z_score.py>`_
+    `Source <https://github.com/FCP-INDI/C-PAC/blob/master/CPAC/alff/alff.py>`_
     
     
     Workflow Inputs::
@@ -286,35 +289,35 @@ def get_zscore(wf_name = 'z_score'):
     Workflow Outputs::
         
         outputspec.z_score_img : string
-             path to image containing Normalized Input Image Z scores across full brain.
+             path to image containing Z scores.
     
     High Level Workflow Graph:
     
     .. image:: ../images/zscore.dot.png
-       :width: 500
+       :width: 600
     
     
     Detailed Workflow Graph:
     
     .. image:: ../images/zscore_detailed.dot.png
-       :width: 500
+       :width: 700
     
     Example
     -------
     >>> import get_zscore as z
     >>> wf = z.get_zscore()
-    >>> wf.inputs.inputspec.input_file = '/home/data/graph_working_dir/calculate_centrality/degree_centrality_binarize.nii.gz'
-    >>> wf.inputs.inputspec.mask_file = '/home/data/graphs/GraphGeneration/new_mask_3m.nii.gz'
+    >>> wf.inputs.inputspec.input_file = '/home/data/working_dir/alff/rest_alff_img.nii.gz'
+    >>> wf.inputs.inputspec.mask_file = '/home/data/masks/new_mask_3m.nii.gz'
     >>> wf.run()
     
     """
-    
+
     import nipype.pipeline.engine as pe
     import nipype.interfaces.utility as util
     import nipype.interfaces.fsl as fsl
-    
-    wflow = pe.Workflow(name = wf_name)
-    
+
+    wflow = pe.Workflow(name=wf_name)
+
     inputNode = pe.Node(util.IdentityInterface(fields=['input_file',
                                                        'mask_file']),
                         name='inputspec')
@@ -324,7 +327,7 @@ def get_zscore(wf_name = 'z_score'):
 
     mean = pe.Node(interface=fsl.ImageStats(),
                    name='mean')
-    mean.inputs.op_string = '-k %s -m'    
+    mean.inputs.op_string = '-k %s -m'
     wflow.connect(inputNode, 'input_file',
                   mean, 'in_file')
     wflow.connect(inputNode, 'mask_file',
@@ -338,9 +341,8 @@ def get_zscore(wf_name = 'z_score'):
                   standard_deviation, 'in_file')
     wflow.connect(inputNode, 'mask_file',
                   standard_deviation, 'mask_file')
-    
-    
-    op_string = pe.Node(util.Function(input_names=['mean','std_dev'],
+
+    op_string = pe.Node(util.Function(input_names=['mean', 'std_dev'],
                                       output_names=['op_string'],
                                       function=get_operand_string),
                         name='op_string')
@@ -348,8 +350,7 @@ def get_zscore(wf_name = 'z_score'):
                   op_string, 'mean')
     wflow.connect(standard_deviation, 'out_stat',
                   op_string, 'std_dev')
-    
-    
+
     z_score = pe.Node(interface=fsl.MultiImageMaths(),
                         name='z_score')
     wflow.connect(op_string, 'op_string',
@@ -358,10 +359,10 @@ def get_zscore(wf_name = 'z_score'):
                   z_score, 'in_file')
     wflow.connect(inputNode, 'mask_file',
                   z_score, 'operand_files')
-    
+
     wflow.connect(z_score, 'out_file',
                   outputNode, 'z_score_img')
-    
+
     return wflow
-    
+
 
