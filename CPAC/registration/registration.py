@@ -2,7 +2,6 @@ import nipype.pipeline.engine as pe
 import nipype.interfaces.utility as util
 import nipype.interfaces.fsl as fsl
 import nipype.interfaces.ants as ants
-from nipype.interfaces.ants import ApplyTransforms
 import nipype.interfaces.c3 as c3
 
 def create_nonlinear_register(name='nonlinear_register'):
@@ -264,6 +263,40 @@ def create_register_func_to_mni(name='register_func_to_mni'):
 
 
 def create_register_func_to_anat(name='register_func_to_anat'):
+    
+    """
+    Registers a functional scan in native space to anatomical space using a
+    linear transform and does not include bbregister.
+
+    Parameters
+    ----------
+    name : string, optional
+        Name of the workflow.
+
+    Returns
+    -------
+    create_register_func_to_anat : nipype.pipeline.engine.Workflow
+
+    Notes
+    -----
+    
+    Workflow Inputs::
+
+        inputspec.func : string (nifti file)
+            Input functional scan to be registered to anatomical space
+        inputspec.anat : string (nifti file)
+            Corresponding anatomical scan of subject
+        inputspec.interp : string
+            Type of interpolation to use ('trilinear' or 'nearestneighbour' or 'sinc')
+            
+    Workflow Outputs::
+    
+        outputspec.func_to_anat_linear_xfm_nobbreg : string (mat file)
+            Affine transformation from functional to anatomical native space
+        outputspec.anat_func_nobbreg : string (nifti file)
+            Functional scan registered to anatomical space
+            
+    """
 
     
     register_func_to_anat = pe.Workflow(name=name)
@@ -324,23 +357,15 @@ def create_bbregister_func_to_anat(name='bbregister_func_to_anat'):
 
     Notes
     -----
-    
-    !!!! SOME OF THE BELOW HAS CHANGED, OBSOLETE CODE HAS BEEN REMOVED
 
     Workflow Inputs::
 
         inputspec.func : string (nifti file)
             Input functional scan to be registered to MNI space
-        inputspec.mni : string (nifti file)
-            Reference MNI file
-        inputspec.anat : string (nifti file)
-            Corresponding anatomical scan of subject
-        inputspec.interp : string
-            Type of interpolation to use ('trilinear' or 'nearestneighbour' or 'sinc')
-        inputspec.anat_to_mni_nonlinear_xfm : string (warp file)
-            Corresponding anatomical native space to MNI warp file
-        inputspec.anat_to_mni_linear_xfm : string (mat file)
-            Corresponding anatomical native space to MNI mat file
+        inputspec.anat_skull : string (nifti file)
+            Corresponding full-head scan of subject
+        inputspec.linear_reg_matrix : string (mat file)
+            Affine matrix from linear functional to anatomical registration
         inputspec.anat_wm_segmentation : string (nifti file)
             White matter segmentation probability mask in anatomical space
         inputspec.bbr_schedule : string (.sch file)
@@ -350,26 +375,9 @@ def create_bbregister_func_to_anat(name='bbregister_func_to_anat'):
     
         outputspec.func_to_anat_linear_xfm : string (mat file)
             Affine transformation from functional to anatomical native space
-        outputspec.func_to_mni_linear_xfm : string (mat file)
-            Affine transformation from functional to MNI space
-        outputspec.mni_to_func_linear_xfm : string (mat file)
-            Affine transformation from MNI to functional space
-        outputspec.anat_wm_edge : string (nifti file)
-            White matter edge mask in anatomical space
         outputspec.anat_func : string (nifti file)
             Functional data in anatomical space
-        outputspec.mni_func : string (nifti file)
-            Functional scan registered to MNI standard space
             
-    Workflow Graph:
-    
-    .. image:: ../images/register_func_to_mni.dot.png
-        :width: 500
-        
-    Detailed Workflow Graph:
-    
-    .. image:: ../images/register_func_to_mni_detailed.dot.png
-        :width: 500
     """
     
     register_bbregister_func_to_anat = pe.Workflow(name=name)
@@ -499,7 +507,6 @@ def create_ants_nonlinear_xfm(name='ants_nonlinear_xfm'):
         :width: 500      
     """
 
-    import nipype.interfaces.ants as ants
     from nipype.interfaces.ants.legacy import GenWarpFields
 
     ants_nonlinear_xfm = pe.Workflow(name=name)
@@ -630,9 +637,7 @@ def create_apply_ants_xfm(dimension, mapnode, name='apply_ants_xfm'):
  
             # converts FSL-format .mat affine xfm into ANTS-format .txt
             # .mat affine comes from Func->Anat registration
-            fsl_reg_2_itk = pe.Node(interface=c3.C3dAffineTool(), name='fsl_reg_2_itk')
-            fsl_reg_2_itk.inputs.itk_transform = True
-            fsl_reg_2_itk.inputs.fsl2ras = True
+            fsl_reg_2_itk = create_fsl_to_itk_conversion(mapnode, 'fsl_reg_2_itk')
 
             #collects series of transformations to be applied to the moving images
             collect_transforms = pe.Node(util.Merge(3), name='collect_transforms')
@@ -655,9 +660,7 @@ def create_apply_ants_xfm(dimension, mapnode, name='apply_ants_xfm'):
 
             # converts FSL-format .mat affine xfm into ANTS-format .txt
             # .mat affine comes from Func->Anat registration
-            fsl_reg_2_itk = pe.Node(interface=c3.C3dAffineTool(), name='fsl_reg_2_itk')
-            fsl_reg_2_itk.inputs.itk_transform = True
-            fsl_reg_2_itk.inputs.fsl2ras = True
+            fsl_reg_2_itk = create_fsl_to_itk_conversion(mapnode, 'fsl_reg_2_itk')
 
             #collects series of transformations to be applied to the moving images
             collect_transforms = pe.Node(util.Merge(3), name='collect_transforms')
@@ -676,9 +679,7 @@ def create_apply_ants_xfm(dimension, mapnode, name='apply_ants_xfm'):
 
             # converts FSL-format .mat affine xfm into ANTS-format .txt
             # .mat affine comes from Func->Anat registration
-            fsl_reg_2_itk = pe.Node(interface=c3.C3dAffineTool(), name='fsl_reg_2_itk')
-            fsl_reg_2_itk.inputs.itk_transform = True
-            fsl_reg_2_itk.inputs.fsl2ras = True
+            fsl_reg_2_itk = create_fsl_to_itk_conversion(mapnode, 'fsl_reg_2_itk')
 
             #collects series of transformations to be applied to the moving images
             collect_transforms = pe.Node(util.Merge(3), name='collect_transforms')
@@ -694,10 +695,7 @@ def create_apply_ants_xfm(dimension, mapnode, name='apply_ants_xfm'):
 
             # converts FSL-format .mat affine xfm into ANTS-format .txt
             # .mat affine comes from Func->Anat registration
-            fsl_reg_2_itk = pe.MapNode(interface=c3.C3dAffineTool(), name='fsl_reg_2_itk',
-                                       iterfield=['source_file'])
-            fsl_reg_2_itk.inputs.itk_transform = True
-            fsl_reg_2_itk.inputs.fsl2ras = True
+            fsl_reg_2_itk = create_fsl_to_itk_conversion(mapnode, 'fsl_reg_2_itk')
 
             #collects series of transformations to be applied to the moving images
             collect_transforms = pe.MapNode(util.Merge(3), name='collect_transforms',
@@ -715,15 +713,15 @@ def create_apply_ants_xfm(dimension, mapnode, name='apply_ants_xfm'):
 
 
     # convert the .mat from linear Func->Anat to ANTS format
-    apply_ants_xfm.connect(inputspec, 'func_anat_affine', fsl_reg_2_itk, 'transform_file')
+    apply_ants_xfm.connect(inputspec, 'func_anat_affine', fsl_reg_2_itk, 'inputspec.transform_file')
 
-    apply_ants_xfm.connect(inputspec, 'conversion_reference', fsl_reg_2_itk, 'reference_file')
+    apply_ants_xfm.connect(inputspec, 'conversion_reference', fsl_reg_2_itk, 'inputspec.reference_file')
 
-    apply_ants_xfm.connect(inputspec, 'conversion_source', fsl_reg_2_itk, 'source_file')
+    apply_ants_xfm.connect(inputspec, 'conversion_source', fsl_reg_2_itk, 'inputspec.source_file')
 
 
     # Premat from Func->Anat linear reg and bbreg (if bbreg is enabled)
-    apply_ants_xfm.connect(fsl_reg_2_itk, 'itk_transform', collect_transforms, 'in3')
+    apply_ants_xfm.connect(fsl_reg_2_itk, 'outputspec.itk_transform', collect_transforms, 'in3')
     
     # Field file from anatomical nonlinear registration
     apply_ants_xfm.connect(inputspec, 'nonlinear_field', collect_transforms, 'in1')
@@ -743,10 +741,11 @@ def create_apply_ants_xfm(dimension, mapnode, name='apply_ants_xfm'):
 
 
 
-def create_fsl_to_itk_conversion(name='fsl_to_itk_conversion'):
+def create_fsl_to_itk_conversion(mapnode, name='fsl_to_itk_conversion'):
 
     """
-    Converts an FSL-format output matrix to an ITK-format (ANTS) matrix.
+    Converts an FSL-format output matrix to an ITK-format (ANTS) matrix
+    for use with ANTS registration tools.
 
     Parameters
     ----------
@@ -776,22 +775,7 @@ def create_fsl_to_itk_conversion(name='fsl_to_itk_conversion'):
     
         outputspec.itk_transform : string (nifti file)
             Converted affine transform in ITK format usable with ANTS
-
-            
-    Registration Procedure:
     
-    1. Converts an FSL-format affine matrix into an ITK-format
-       affine matrix (for use with ANTS registration tools)
-       
-    Workflow Graph:
-    
-    .. image:: 
-        :width: 500
-    
-    Detailed Workflow Graph:
-    
-    .. image:: 
-        :width: 500      
     """
 
     fsl_to_itk_conversion = pe.Workflow(name=name)
@@ -805,7 +789,15 @@ def create_fsl_to_itk_conversion(name='fsl_to_itk_conversion'):
 
     # converts FSL-format .mat affine xfm into ANTS-format .txt
     # .mat affine comes from Func->Anat registration
-    fsl_reg_2_itk = pe.Node(c3.C3dAffineTool(), name='fsl_reg_2_itk')
+    if mapnode == 0:
+    
+        fsl_reg_2_itk = pe.Node(c3.C3dAffineTool(), name='fsl_reg_2_itk')
+    
+    elif mapnode == 1:
+    
+        fsl_reg_2_itk = pe.MapNode(interface=c3.C3dAffineTool(), name='fsl_reg_2_itk',
+                                           iterfield=['source_file'])
+        
     fsl_reg_2_itk.inputs.itk_transform = True
     fsl_reg_2_itk.inputs.fsl2ras = True
 
@@ -822,7 +814,7 @@ def create_fsl_to_itk_conversion(name='fsl_to_itk_conversion'):
     fsl_to_itk_conversion.connect(inputspec, 'source_file', fsl_reg_2_itk, 'source_file')
 
 
-    fsl_to_itk_conversion.connect(warp_brain, 'itk_transform', outputspec, 'itk_transform')
+    fsl_to_itk_conversion.connect(fsl_reg_2_itk, 'itk_transform', outputspec, 'itk_transform')
 
 
 
