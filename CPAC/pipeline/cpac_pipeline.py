@@ -1327,7 +1327,11 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
     strat_list += new_strat_list
 
 
-
+    inputnode_fwhm = None
+    if c.fwhm != None:
+        inputnode_fwhm = pe.Node(util.IdentityInterface(fields=['fwhm']),
+                             name='fwhm_input')
+        inputnode_fwhm.iterables = ("fwhm", c.fwhm)
 
 
     """
@@ -1346,7 +1350,10 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                 func_mni_warp = pe.Node(interface=fsl.ApplyWarp(),
                                         name='func_mni_fsl_warp_%d' % num_strat)
                 func_mni_warp.inputs.ref_file = c.standardResolutionBrain
-    
+                
+                func_mni_smooth = pe.Node(interface=fsl.MultiImageMaths(),
+                                          name='func_mni_smooth_%d' % num_strat)
+                
                 functional_brain_mask_to_standard = pe.Node(interface=fsl.ApplyWarp(),
                                                             name='func_mni_fsl_warp_mask_%d' % num_strat)
                 functional_brain_mask_to_standard.inputs.interp = 'nn'
@@ -1356,6 +1363,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                 mean_functional_warp.inputs.ref_file = c.standardResolutionBrain
     
                 try:
+                    # Transform 4D functional to standard space
                     node, out_file = strat.get_node_from_resource_pool('anatomical_to_mni_nonlinear_xfm')
                     workflow.connect(node, out_file,
                                      func_mni_warp, 'field_file')
@@ -1367,8 +1375,8 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                     node, out_file = strat.get_leaf_properties()
                     workflow.connect(node, out_file,
                                      func_mni_warp, 'in_file')
-    
-
+                    
+                    # Apply transformation to standard space for brain mask and mean functional
                     node, out_file = strat.get_node_from_resource_pool('anatomical_to_mni_nonlinear_xfm')
                     workflow.connect(node, out_file,
                                      functional_brain_mask_to_standard, 'field_file')
@@ -1387,17 +1395,30 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
                     node, out_file = strat.get_node_from_resource_pool('mean_functional')
                     workflow.connect(node, out_file, mean_functional_warp, 'in_file')
-
                     
-
+                    # Apply smoothing to 4D data
+                    if c.fwhm != None:
+                        workflow.connect(func_mni_warp, 'out_file',                     # takes in output from func_mni_warp
+                                         func_mni_smooth, 'in_file')
+                        workflow.connect(inputnode_fwhm, ('fwhm', set_gauss),           # takes in the fwhm and transforms to sigma
+                                         func_mni_smooth, 'op_string')
+                        workflow.connect(functional_brain_mask_to_standard, 'out_file', # applies a brain mask
+                                         func_mni_smooth, 'operand_files')
+                    
+                    
                 except:
                     print 'Invalid Connection: Register Functional timeseries to MNI space:', num_strat, ' resource_pool: ', strat.get_resource_pool()
                     raise
     
-                strat.update_resource_pool({'functional_mni':(func_mni_warp, 'out_file'),
-                                            'functional_brain_mask_to_standard':(functional_brain_mask_to_standard, 'out_file'),
+                strat.update_resource_pool({'functional_mni':(func_mni_warp, 'out_file'), 
+                                            'functional_brain_mask_to_standard':(functional_brain_mask_to_standard, 'out_file'), 
                                             'mean_functional_in_mni':(mean_functional_warp, 'out_file')})
                 strat.append_name(func_mni_warp.name)
+                if c.fwhm != None:
+                    strat.update_resource_pool({'functional_mni_smooth':(func_mni_smooth, 'out_file')})
+                    strat.append_name(func_mni_smooth.name)
+                strat.update_resource_pool()
+                
                 create_log_node(func_mni_warp, 'out_file', num_strat)
             
                 num_strat += 1
@@ -1825,15 +1846,6 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                 num_strat += 1
     
     strat_list += new_strat_list
-
-
-    inputnode_fwhm = None
-    if c.fwhm != None:
-
-        inputnode_fwhm = pe.Node(util.IdentityInterface(fields=['fwhm']),
-                             name='fwhm_input')
-        inputnode_fwhm.iterables = ("fwhm", c.fwhm)
-
 
 
     """    
