@@ -1,22 +1,18 @@
 import os
-import sys
-import copy
-import argparse
 import time
+from time import strftime
 import nipype.pipeline.engine as pe
 import nipype.interfaces.fsl as fsl
-import nipype.interfaces.utility as util
 import nipype.interfaces.io as nio
+from nipype.interfaces.afni import preprocess
 from   nipype.pipeline.utils import format_dot
 import nipype.interfaces.ants as ants
-from nipype.interfaces.ants import ApplyTransforms
 import nipype.interfaces.c3 as c3
 from nipype import config
 from nipype import logging
-from multiprocessing import Process
+logger = logging.getLogger('workflow')
 import pkg_resources as p
 import CPAC
-import shutil
 from CPAC.anat_preproc.anat_preproc import create_anat_preproc
 from CPAC.func_preproc.func_preproc import create_func_preproc
 from CPAC.seg_preproc.seg_preproc import create_seg_preproc
@@ -46,10 +42,9 @@ from CPAC.vmhc.vmhc import create_vmhc
 from CPAC.reho.reho import create_reho
 from CPAC.alff.alff import create_alff
 from CPAC.sca.sca import create_sca, create_temporal_reg
-from CPAC.interfaces.afni import preprocess 
 import zlib
 import linecache
-from string import Template
+
 
 class strategy:
 
@@ -80,31 +75,29 @@ class strategy:
             if resource_key in self.resource_pool:
                 return self.resource_pool[resource_key]
         except:
-            print 'no node for output: ', resource_key
+            logger.info('no node for output: ')
+            logger.info(resource_key)
             raise
 
     def update_resource_pool(self, resources):
         for key, value in resources.items():
             if key in self.resource_pool:
-                print 'Warning key %s already exists in resource pool, replacing with %s ' % (key, value)
+                logger.info('Warning key %s already exists in resource pool, replacing with %s ' % (key, value))
 
             self.resource_pool[key] = value
 
     
-def prep_workflow(sub_dict, c, strategies, p_name=None):
+def prep_workflow(sub_dict, c, strategies, run, p_name=None):
+
+    # perhaps in future allow user to set threads maximum
+    # this is for centrality mostly    
+    # import mkl
+    numThreads = '1'
+    os.environ['OMP_NUM_THREADS'] = numThreads
+    os.environ['MKL_NUM_THREADS'] = numThreads
 
 
-    timing = open(os.path.join(c.outputDirectory, 'cpac_pipeline_timing.txt'), 'wt')
-
-    print >>timing, "Starting CPAC run for configuration: ", c
-    print >>timing, "\n"
-
-    # Start timing here
-    pipeline_start_time = time.time()
-
-
-
-    print '********************', c.standardResolutionBrain
+    logger.info('******************** %s' % c.standardResolutionBrain)
 
     qc_montage_id_a = {}
     qc_montage_id_s = {}
@@ -128,21 +121,20 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
     config.update_config({'logging': {'log_directory': log_dir, 'log_to_file': True}})
     logging.update_logging(config)
 
+
     if c.reGenerateOutputs is True:
 
         import commands
         cmd = "find %s -name \'*sink*\' -exec rm -rf {} \\;" % os.path.join(c.workingDirectory, wfname)
-        print cmd
+        logger.info(cmd)
         commands.getoutput(cmd)
         cmd = "find %s -name \'*link*\' -exec rm -rf {} \\;" % os.path.join(c.workingDirectory, wfname)
-        print cmd
+        logger.info(cmd)
         commands.getoutput(cmd)
         cmd = "find %s -name \'*log*\' -exec rm -rf {} \\;" % os.path.join(c.workingDirectory, wfname)
-        print cmd
+        logger.info(cmd)
         commands.getoutput(cmd)
 
-    mflow = None
-    pflow = None
 
     def create_log_node(wflow, output, indx, scan_id = None):
         #call logging workflow
@@ -160,6 +152,30 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
             log_wf.inputs.inputspec.log_dir = log_dir
             log_wf.inputs.inputspec.inputs = log_dir
             return log_wf
+        
+    def logStandardError(sectionName, errLine, errNum):
+        
+        logger.info("\n\n" + 'ERROR: %s - %s' % (sectionName, errLine) + "\n\n" + \
+                    "Error name: cpac_pipeline_%s" % (errNum) + "\n\n")
+        
+    def logConnectionError(workflow_name, numStrat, resourcePool, errNum):
+        
+        logger.info("\n\n" + 'ERROR: Invalid Connection: %s: %s, resource_pool: %s' \
+                    % (workflow_name, numStrat, resourcePool) + "\n\n" + "Error name: cpac_pipeline_%s" % (errNum) + \
+                    "\n\n" + "This is a pipeline creation error - the workflows have not started yet." + "\n\n")
+        
+    def logStandardWarning(sectionName, warnLine):
+        
+        logger.info("\n\n" + 'WARNING: %s - %s' % (sectionName, warnLine) + "\n\n")
+        
+    def getNodeList(strategy):
+        
+        nodes = []
+        for node in strategy.name:
+            nodes.append(node[:-2])
+            
+        return nodes
+        
 
     strat_list = []
 
@@ -170,12 +186,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
     """
     Initialize Anatomical Input Data Flow
     """
-
-    print >>timing, "Starting 'Initalize Anatomical Input Data Flow'.."
-    print >>timing, "configuration parameter: 'runAnatomicalDataGathering'"
-    print >>timing, "workflow: create_anat_datasource()"
-
-    new_strat_list = []
+    
     num_strat = 0
 
     strat_initial = None
@@ -200,14 +211,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
         strat_list.append(strat_initial)
 
-        print >>timing, "run time (minutes): ", ((time.time() - workflow_start_time)/60)
-        print >>timing, "\n"
-
-    print strat_list
-
     
-
-
     """
     Inserting Anatomical Preprocessing workflow
     """
@@ -230,14 +234,13 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
             # create a new node, Remember to change its name!
             anat_preproc = create_anat_preproc().clone('anat_preproc_%d' % num_strat)
 
-
             try:
                 # connect the new node to the previous leaf
                 node, out_file = strat.get_leaf_properties()
                 workflow.connect(node, out_file, anat_preproc, 'inputspec.anat')
 
             except:
-                print 'Invalid Connection: Anat Preprocessing No valid Previous for strat : ', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                logConnectionError('Anatomical Preprocessing No valid Previous for strat', num_strat, strat.get_resource_pool(), '0001')
                 num_strat += 1
                 continue
 
@@ -309,10 +312,10 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                 
 
                 except:
-                    print 'Invalid Connection: Anatomical Registration:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                    logConnectionError('Anatomical Registration (FSL)', num_strat, strat.get_resource_pool(), '0002')
                     raise
 
-                if 0 in c.runRegistrationPreprocessing:
+                if (0 in c.runRegistrationPreprocessing) or ('ANTS' in c.regOption):
                     tmp = strategy()
                     tmp.resource_pool = dict(strat.resource_pool)
                     tmp.leaf_node = (strat.leaf_node)
@@ -344,10 +347,19 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
             
             
                 num_strat += 1
+                
+        strat_list += new_strat_list
+
+
+        
+        new_strat_list = []
             
+        for strat in strat_list:
             
-            # or run ANTS anatomical-to-MNI registration instead        
-            elif 'ANTS' in c.regOption:
+            nodes = getNodeList(strat)
+            
+            # or run ANTS anatomical-to-MNI registration instead
+            if ('ANTS' in c.regOption) and ('anat_mni_fnirt_register' not in nodes):
 
                 ants_reg_anat_mni = create_ants_nonlinear_xfm('anat_mni_ants_register_%d' % num_strat)
 
@@ -360,7 +372,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                     ants_reg_anat_mni.inputs.inputspec.reference_brain = c.standardResolutionBrainAnat
                 
                 except:
-                    print 'Invalid Connection: Anatomical Registration:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                    logConnectionError('Anatomical Registration (ANTS)', num_strat, strat.get_resource_pool(), '0003')
                     raise
 
                 if 0 in c.runRegistrationPreprocessing:
@@ -387,14 +399,13 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                                             'mni_to_anatomical_linear_xfm':(ants_reg_anat_mni, 'outputspec.inverse_warp'), #<---- this is the mni to anatomical NONLINEAR xfm
                                             'mni_normalized_anatomical':(ants_reg_anat_mni, 'outputspec.output_brain')})
 
-                create_log_node(ants_reg_anat_mni, 'outputspec.output_brain', num_strat)  
+                create_log_node(ants_reg_anat_mni, 'outputspec.output_brain', num_strat)
           
                 num_strat += 1
             
     strat_list += new_strat_list
     
-    
- 
+
 
     """
     Inserting Segmentation Preprocessing
@@ -413,10 +424,12 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
         workflow_bit_id['seg_preproc'] = workflow_counter
         for strat in strat_list:
-
-            if 'FSL' in c.regOption:
+            
+            nodes = getNodeList(strat)
+            
+            if 'anat_mni_fnirt_register' in nodes:
                 seg_preproc = create_seg_preproc(False, 'seg_preproc_%d' % num_strat)
-            elif 'ANTS' in c.regOption:
+            elif 'anat_mni_ants_register' in nodes:
                 seg_preproc = create_seg_preproc(True, 'seg_preproc_%d' % num_strat)
 
             try:
@@ -424,14 +437,14 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                 workflow.connect(node, out_file,
                                  seg_preproc, 'inputspec.brain')
 
-                if 'FSL' in c.regOption:
+                if 'anat_mni_fnirt_register' in nodes:
                     node, out_file = strat.get_node_from_resource_pool('mni_to_anatomical_linear_xfm')
                     workflow.connect(node, out_file,
                                      seg_preproc, 'inputspec.standard2highres_mat')
-                elif 'ANTS' in c.regOption:
+                elif 'anat_mni_ants_register' in nodes:
                     node, out_file = strat.get_node_from_resource_pool('ants_affine_xfm')
                     workflow.connect(node, out_file,
-                                     seg_preproc, 'inputspec.standard2highres_mat')                
+                                     seg_preproc, 'inputspec.standard2highres_mat')
 
 
                 seg_preproc.inputs.inputspec.PRIOR_CSF = c.PRIOR_CSF
@@ -453,7 +466,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
 
             except:
-                print 'Invalid Connection: Segmentation Preprocessing:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                logConnectionError('Segmentation Preprocessing', num_strat, strat.get_resource_pool(), '0004')
                 raise
 
             if 0 in c.runSegmentationPreprocessing:
@@ -481,8 +494,6 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
             print >>timing, "\n"
 
     strat_list += new_strat_list
-
-
 
 
     """
@@ -527,7 +538,6 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
             print >>timing, "\n"
 
     strat_list += new_strat_list
-
 
 
 
@@ -616,7 +626,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                 workflow.connect(node, out_file, func_preproc, 'inputspec.rest')
 
             except:
-                print 'Invalid Connection: Functional Preprocessing No valid Previous for strat : ', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                logConnectionError('Functional Preprocessing', num_strat, strat.get_resource_pool(), '0005')
                 num_strat += 1
                 continue
 
@@ -641,7 +651,6 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
             strat.update_resource_pool({'functional_preprocessed_mask':(func_preproc, 'outputspec.preprocessed_mask')})
             strat.update_resource_pool({'movement_parameters':(func_preproc, 'outputspec.movement_parameters')})
             strat.update_resource_pool({'max_displacement':(func_preproc, 'outputspec.max_displacement')})
-            #strat.update_resource_pool({'xform_matrix':(func_preproc, 'outputspec.xform_matrix')})
             strat.update_resource_pool({'preprocessed':(func_preproc, 'outputspec.preprocessed')})
             strat.update_resource_pool({'functional_brain_mask':(func_preproc, 'outputspec.mask')})
             strat.update_resource_pool({'motion_correct':(func_preproc, 'outputspec.motion_correct')})
@@ -660,8 +669,8 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
 
     """
-    Inserting Friston's 24 parameter  Workflow
-    Incase this workflow runs , it overwrites the movement_parameters file
+    Inserting Friston's 24 parameter Workflow
+    In case this workflow runs , it overwrites the movement_parameters file
     So the file contains 24 parameters for motion and that gets wired to all the workflows
     that depend on. The effect should be seen when regressing out nuisance signals and motion
     is used as one of the regressors
@@ -692,7 +701,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                                  fristons_model, 'inputspec.movement_file')
 
             except:
-                print 'Invalid Connection: fristons_parameter_model ', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                logConnectionError('Friston\'s Parameter Model', num_strat, strat.get_resource_pool(), '0006')
                 raise
 
             if 0 in c.runFristonModel:
@@ -711,114 +720,9 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
             create_log_node(fristons_model, 'outputspec.movement_file', num_strat)
             
             num_strat += 1
-
-            print >>timing, "run time (minutes): ", ((time.time() - workflow_start_time)/60)
-            print >>timing, "\n"
-
+    
     strat_list += new_strat_list
 
-
-
-
-    """
-    Inserting Anatomical to Functional Registration
-    """
-    """
-    new_strat_list = []
-    num_strat = 0
-
-    ### REDUNDANT REGISTRATION!!!  ---  DOUBLE CHECK
-
-    workflow_counter += 1
-    if 1 in c.runAnatomicalToFunctionalRegistration:
-        workflow_bit_id['anat_to_func_register'] = workflow_counter
-        for strat in strat_list:
-            anat_to_func_reg = pe.Node(interface=fsl.FLIRT(),
-                               name='anat_to_func_register_%d' % num_strat)
-            anat_to_func_reg.inputs.cost = 'corratio'
-            anat_to_func_reg.inputs.dof = 6
-
-            inv_anat_to_func = pe.Node(interface=fsl.ConvertXFM(),
-                                       name='inv_anat_to_func_register_%d' % num_strat)
-            inv_anat_to_func.inputs.invert_xfm = True
-
-            func_gm = pe.Node(interface=fsl.ApplyXfm(),
-                               name='func_gm_%d' % num_strat)
-            func_gm.inputs.apply_xfm = True
-            func_gm.inputs.interp = 'nearestneighbour'
-
-            func_csf = pe.Node(interface=fsl.ApplyXfm(),
-                               name='func_csf_%d' % num_strat)
-            func_csf.inputs.apply_xfm = True
-            func_csf.inputs.interp = 'nearestneighbour'
-
-            func_wm = pe.Node(interface=fsl.ApplyXfm(),
-                               name='func_wm_%d' % num_strat)
-            func_wm.inputs.apply_xfm = True
-            func_wm.inputs.interp = 'nearestneighbour'
-
-            try:
-                node, out_file = strat.get_node_from_resource_pool('anatomical_brain')
-                workflow.connect(node, out_file,
-                                 anat_to_func_reg, 'in_file')
-                workflow.connect(anat_to_func_reg, 'out_matrix_file',
-                                 inv_anat_to_func, 'in_file')
-
-                node, out_file = strat.get_node_from_resource_pool('mean_functional')
-                workflow.connect(node, out_file,
-                                 anat_to_func_reg, 'reference')
-                workflow.connect(node, out_file,
-                                 func_gm, 'reference')
-                workflow.connect(node, out_file,
-                                 func_csf, 'reference')
-                workflow.connect(node, out_file,
-                                 func_wm, 'reference')
-
-                node, out_file = strat.get_node_from_resource_pool('anatomical_gm_mask')
-                workflow.connect(node, out_file,
-                                 func_gm, 'in_file')
-                workflow.connect(anat_to_func_reg, 'out_matrix_file',
-                                 func_gm, 'in_matrix_file')
-
-                node, out_file = strat.get_node_from_resource_pool('anatomical_csf_mask')
-                workflow.connect(node, out_file,
-                                 func_csf, 'in_file')
-                workflow.connect(anat_to_func_reg, 'out_matrix_file',
-                                 func_csf, 'in_matrix_file')
-
-                node, out_file = strat.get_node_from_resource_pool('anatomical_wm_mask')
-                workflow.connect(node, out_file,
-                                 func_wm, 'in_file')
-                workflow.connect(anat_to_func_reg, 'out_matrix_file',
-                                 func_wm, 'in_matrix_file')
-
-            except:
-                print 'Invalid Connection: Anatomical to Functional Registration:', num_strat, ' resource_pool: ', strat.get_resource_pool()
-                raise
-
-            if 0 in c.runAnatomicalToFunctionalRegistration:
-                tmp = strategy()
-                tmp.resource_pool = dict(strat.resource_pool)
-                tmp.leaf_node = (strat.leaf_node)
-                tmp.leaf_out_file = str(strat.leaf_out_file)
-                tmp.name = list(strat.name)
-                strat = tmp
-                new_strat_list.append(strat)
-
-            strat.append_name(anat_to_func_reg.name)
-
-            strat.update_resource_pool({'anatomical_to_functional_xfm':(anat_to_func_reg, 'out_matrix_file'),
-                                        'inverse_anatomical_to_functional_xfm':(inv_anat_to_func, 'out_file'),
-                                        'functional_gm_mask':(func_gm, 'out_file'),
-                                        'functional_wm_mask':(func_wm, 'out_file'),
-                                        'functional_csf_mask':(func_csf, 'out_file')})
-            
-            create_log_node(anat_to_func_reg, 'out_matrix_file', num_strat)
-
-            num_strat += 1
-
-    strat_list += new_strat_list
-    """
 
     """
     Func -> T1 Registration (Initial Linear reg)
@@ -857,8 +761,8 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
    
 
-            except:
-                print 'Invalid Connection: Register Functional to Anatomical (pre BBReg):', num_strat, ' resource_pool: ', strat.get_resource_pool()
+            except:               
+                logConnectionError('Register Functional to Anatomical (pre BBReg)', num_strat, strat.get_resource_pool(), '0007')
                 raise
 
             if 0 in c.runRegisterFuncToAnat:
@@ -874,10 +778,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
             # strat.set_leaf_properties(func_mni_warp, 'out_file')
 
             strat.update_resource_pool({'mean_functional_in_anat':(func_to_anat, 'outputspec.anat_func_nobbreg'),
-                                        #'anatomical_wm_edge':(func_to_anat, 'outputspec.anat_wm_edge'),
                                         'functional_to_anat_linear_xfm':(func_to_anat, 'outputspec.func_to_anat_linear_xfm_nobbreg')})
-                                        #'functional_to_mni_linear_xfm':(func_to_anat, 'outputspec.func_to_anat_linear_xfm'),
-                                        #'mni_to_functional_linear_xfm':(func_to_anat, 'outputspec.mni_to_func_linear_xfm')})
 
             # Outputs:
             # functional_to_anat_linear_xfm = func-t1.mat, linear, sent to 'premat' of post-FNIRT applywarp,
@@ -887,7 +788,6 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
             num_strat += 1
 
     strat_list += new_strat_list
-
 
 
 
@@ -936,27 +836,32 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
    
 
             except:
-                print 'Invalid Connection: Register Functional to Anatomical (BBReg):', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                logConnectionError('Register Functional to Anatomical (BBReg)', num_strat, strat.get_resource_pool(), '0008')
                 raise
+
 
             if 0 in c.runBBReg:
                 tmp = strategy()
                 tmp.resource_pool = dict(strat.resource_pool)
                 tmp.leaf_node = (strat.leaf_node)
                 tmp.out_file = str(strat.leaf_out_file)
+                
+                # This line is needed here for some reason, otherwise the connection
+                # between func_preproc and nuisance will break - even though this
+                # workflow has nothing to do with it - but excluding this line
+                # below removes the leaf node from the new forked strat
+                tmp.leaf_out_file = str(strat.leaf_out_file)
+                
                 tmp.name = list(strat.name)
                 strat = tmp
                 new_strat_list.append(strat)
+               
 
-            strat.append_name(func_to_anat.name)
+            strat.append_name(func_to_anat_bbreg.name)
             # strat.set_leaf_properties(func_mni_warp, 'out_file')
 
-            strat.update_resource_pool({#'mean_functional_in_mni':(copy_tr, 'out_file'),
-                                        'mean_functional_in_anat':(func_to_anat_bbreg, 'outputspec.anat_func'),
-                                        #'anatomical_wm_edge':(func_to_anat, 'outputspec.anat_wm_edge'),
+            strat.update_resource_pool({'mean_functional_in_anat':(func_to_anat_bbreg, 'outputspec.anat_func'),
                                         'functional_to_anat_linear_xfm':(func_to_anat_bbreg, 'outputspec.func_to_anat_linear_xfm')})
-                                        #'functional_to_mni_linear_xfm':(func_to_anat, 'outputspec.func_to_anat_linear_xfm'),
-                                        #'mni_to_functional_linear_xfm':(func_to_anat, 'outputspec.mni_to_func_linear_xfm')})
 
             # Outputs:
             # functional_to_anat_linear_xfm = func-t1.mat, linear, sent to 'premat' of post-FNIRT applywarp,
@@ -966,112 +871,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
             num_strat += 1
 
     strat_list += new_strat_list
-
-
-    """
-    Func -> T1 Registration (BBREG), this has an ApplyWarp (mni warp) which
-    takes in the premat, for some reason - may not actually go anywhere
-    """
-    """
-    # Outputs 'functional_to_anat_linear_xfm', a matrix file of the functional-to-anatomical
-    # registration warp to be applied LATER in func_mni_warp, which accepts it as input 'premat'
-
-    new_strat_list = []
-    num_strat = 0
-    workflow_counter += 1
-    
-    if 1 in c.runRegisterFuncToAnat:
-
-        print >>timing, "Starting 'Func -> T1 Registration (BBREG)'.."
-        print >>timing, "configuration parameter: 'runRegisterFuncToAnat'"
-        print >>timing, "workflow: create_bbregister_func_to_anat()"
-
-        workflow_bit_id['func_to_anat'] = workflow_counter
-        for strat in strat_list:
-
-            print >>timing, "strat: ", strat
-            workflow_start_time = time.time()
-
-            func_to_anat = create_bbregister_func_to_anat('func_to_anat_%d' % num_strat)
-       
-            # Input registration parameters
-            func_to_anat.inputs.inputspec.mni = c.standardResolutionBrain
-            func_to_anat.inputs.inputspec.interp = 'trilinear'
-            func_to_anat.inputs.inputspec.bbr_schedule = c.boundaryBasedRegistrationSchedule
-
-            try:
-                def pick_wm(seg_prob_list):
-                    seg_prob_list.sort()
-                    return seg_prob_list[-1]
-
-                # Input functional image (func.nii.gz)
-                node, out_file = strat.get_node_from_resource_pool('mean_functional')
-                workflow.connect(node, out_file,
-                                 func_to_anat, 'inputspec.func')
-
-                # Input segmentation probability maps for white matter segmentation
-                node, out_file = strat.get_node_from_resource_pool('seg_probability_maps')
-                workflow.connect(node, (out_file, pick_wm),
-                                 func_to_anat, 'inputspec.anat_wm_segmentation')
-
-                # Input anatomical whole-head image
-                node, out_file = strat.get_node_from_resource_pool('anatomical_reorient')
-                workflow.connect(node, out_file,
-                                 func_to_anat, 'inputspec.anat_skull')
-
-                # Input skull-stripped anatomical (anat.nii.gz)
-                node, out_file = strat.get_node_from_resource_pool('anatomical_brain')
-                workflow.connect(node, out_file,
-                                 func_to_anat, 'inputspec.anat')
-
-
-                # Necessary???
-                #node, out_file = strat.get_node_from_resource_pool('anatomical_to_mni_linear_xfm')
-                #workflow.connect(node, out_file,
-                # func_to_anat, 'inputspec.anat_to_mni_linear_xfm')
-
-                # Nonlinear transform - WHY IS THIS HERE?
-                node, out_file = strat.get_node_from_resource_pool('anatomical_to_mni_nonlinear_xfm')
-                workflow.connect(node, out_file,
-                                 func_to_anat, 'inputspec.anat_to_mni_nonlinear_xfm')
-   
-
-            except:
-                print 'Invalid Connection: Register Functional to MNI:', num_strat, ' resource_pool: ', strat.get_resource_pool()
-                raise
-
-            if 0 in c.runRegisterFuncToAnat:
-                tmp = strategy()
-                tmp.resource_pool = dict(strat.resource_pool)
-                tmp.leaf_node = (strat.leaf_node)
-                tmp.out_file = str(strat.leaf_out_file)
-                tmp.name = list(strat.name)
-                strat = tmp
-                new_strat_list.append(strat)
-
-            strat.append_name(func_to_anat.name)
-            # strat.set_leaf_properties(func_mni_warp, 'out_file')
-
-            strat.update_resource_pool({#'mean_functional_in_mni':(copy_tr, 'out_file'),
-                                        'mean_functional_in_mni':(func_to_anat, 'outputspec.mni_func'),
-                                        'mean_functional_in_anat':(func_to_anat, 'outputspec.anat_func'),
-                                        #'anatomical_wm_edge':(func_to_anat, 'outputspec.anat_wm_edge'),
-                                        'functional_to_anat_linear_xfm':(func_to_anat, 'outputspec.func_to_anat_linear_xfm')})
-                                        #'functional_to_mni_linear_xfm':(func_to_anat, 'outputspec.func_to_anat_linear_xfm'),
-                                        #'mni_to_functional_linear_xfm':(func_to_anat, 'outputspec.mni_to_func_linear_xfm')})
-
-            # Outputs:
-            # functional_to_anat_linear_xfm = func-t1.mat, linear, sent to 'premat' of post-FNIRT applywarp,
-            # or to the input of the post-ANTS c3d_affine_tool
-            
-            #create_log_node(func_to_anat, 'outputspec.mni_func', num_strat)
-            num_strat += 1
-
-            print >>timing, "run time: ", int(((time.time() - workflow_start_time)/60)), " min, ", (time.time() - workflow_start_time), " sec"
-            print >>timing, "\n"
-
-    strat_list += new_strat_list
-    """
+     
 
 
 
@@ -1126,7 +926,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                                  gen_motion_stats, 'inputspec.mask')
 
             except:
-                print 'Invalid Connection: Generate Motion Statistics:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                logConnectionError('Generate Motion Statistics', num_strat, strat.get_resource_pool(), '0009')
                 raise
 
             if 0 in c.runGenerateMotionStatistics:
@@ -1156,10 +956,10 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
 
 
-
     """
     Inserting Nuisance Workflow
     """
+    
     new_strat_list = []
     num_strat = 0
 
@@ -1172,10 +972,12 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
         workflow_bit_id['nuisance'] = workflow_counter
         for strat in strat_list:
-
-            if 'FSL' in c.regOption:
+            
+            nodes = getNodeList(strat)
+            
+            if 'anat_mni_fnirt_register' in nodes:
                 nuisance = create_nuisance(False, 'nuisance_%d' % num_strat)
-            elif 'ANTS' in c.regOption:
+            else:
                 nuisance = create_nuisance(True, 'nuisance_%d' % num_strat)
 
             nuisance.get_node('residuals').iterables = ([('selector', c.Corrections),
@@ -1207,19 +1009,19 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                 node, out_file = strat.get_node_from_resource_pool('functional_to_anat_linear_xfm')
                 workflow.connect(node, out_file,
                                  nuisance, 'inputspec.func_to_anat_linear_xfm')
-
-                if 'FSL' in c.regOption:
+                
+                if 'anat_mni_fnirt_register' in nodes:
                     node, out_file = strat.get_node_from_resource_pool('mni_to_anatomical_linear_xfm')
                     workflow.connect(node, out_file,
                                      nuisance, 'inputspec.mni_to_anat_linear_xfm')
-                elif 'ANTS' in c.regOption:
+                else:
                     node, out_file = strat.get_node_from_resource_pool('ants_affine_xfm')
                     workflow.connect(node, out_file,
                                      nuisance, 'inputspec.mni_to_anat_linear_xfm')
 
 
             except:
-                print 'Invalid Connection: Nuisance:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                logConnectionError('Nuisance', num_strat, strat.get_resource_pool(), '0010')
                 raise
 
 
@@ -1250,10 +1052,10 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
 
 
-
     """
     Inserting Median Angle Correction Workflow
     """
+    
     new_strat_list = []
     num_strat = 0
 
@@ -1278,7 +1080,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                 workflow.connect(node, out_file,
                                  median_angle_corr, 'inputspec.subject')
             except:
-                print 'Invalid Connection: Median Angle Correction:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                logConnectionError('Median Angle Correction', num_strat, strat.get_resource_pool(), '0011')
                 raise
 
             if 0 in c.runMedianAngleCorrection:
@@ -1307,11 +1109,11 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
 
 
-
     """
     Inserting ALFF/fALFF
     Workflow
     """
+    
     new_strat_list = []
     num_strat = 0
 
@@ -1335,7 +1137,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                                  alff, 'inputspec.rest_mask')
 
             except:
-                print 'Invalid Connection: ALFF:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                logConnectionError('ALFF', num_strat, strat.get_resource_pool(), '0012')
                 raise
             strat.append_name(alff.name)
             strat.update_resource_pool({'alff_img':(alff, 'outputspec.alff_img')})
@@ -1350,10 +1152,10 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
 
 
-
     """
     Inserting Frequency Filtering Node
     """
+    
     new_strat_list = []
     num_strat = 0
 
@@ -1375,7 +1177,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                                  frequency_filter, 'realigned_file')
 
             except:
-                print 'Invalid Connection: Frequency Filtering:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                logConnectionError('Frequency Filtering', num_strat, strat.get_resource_pool(), '0013')
                 raise
 
             if 0 in c.runFrequencyFiltering:
@@ -1401,18 +1203,15 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
 
 
-
     """
     Inserting Scrubbing Workflow
     """
+    
     new_strat_list = []
     num_strat = 0
 
     workflow_counter += 1
 
-    ###
-    if c.runScrubbing == 10:
-        c.runScrubbing = [1, 0]
 
     if 1 in c.runScrubbing:
         workflow_bit_id['scrubbing'] = workflow_counter
@@ -1435,7 +1234,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                                  scrubbing, 'inputspec.movement_parameters')
 
             except:
-                print 'Invalid Connection: Scrubbing Workflow:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                logConnectionError('Scrubbing Workflow', num_strat, strat.get_resource_pool(), '0014')
                 raise
 
             if 0 in c.runScrubbing:
@@ -1467,19 +1266,21 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                              name='fwhm_input')
         inputnode_fwhm.iterables = ("fwhm", c.fwhm)
 
-
     """
     Func -> Template, uses ApplyWarp (FSL) or Merge + WarpImageMultiTransform (ANTS) to apply
     also includes mean functional warp
     """
+    
     new_strat_list = []
     num_strat = 0
     if 1 in c.runRegisterFuncToMNI:
 
         for strat in strat_list:
-
+            
+            nodes = getNodeList(strat)
+            
             # Run FSL ApplyWarp
-            if 'FSL' in c.regOption:
+            if 'anat_mni_fnirt_register' in nodes:
 
                 func_mni_warp = pe.Node(interface=fsl.ApplyWarp(),
                                         name='func_mni_fsl_warp_%d' % num_strat)
@@ -1541,7 +1342,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                     
                     
                 except:
-                    print 'Invalid Connection: Register Functional timeseries to MNI space:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                    logConnectionError('Functional Timeseries Registration to MNI space (FSL)', num_strat, strat.get_resource_pool(), '0015')
                     raise
     
                 strat.update_resource_pool({'functional_mni':(func_mni_warp, 'out_file'), 
@@ -1556,10 +1357,16 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                 create_log_node(func_mni_warp, 'out_file', num_strat)
             
                 num_strat += 1
-
-
-            # Run ANTS apply (WarpImageMultiTransform) instead
-            elif 'ANTS' in c.regOption:
+                
+                
+        strat_list += new_strat_list  
+            
+        for strat in strat_list:
+            
+            nodes = getNodeList(strat)
+            
+            # Run ANTS apply (WarpImageMultiTransform) instead       
+            if ('ANTS' in c.regOption) and ('func_mni_fsl_warp' not in nodes):
 
                 # THIS SHOULD ALL BE COMBINED INTO ITS OWN WORKFLOW IN REGISTRATION.PY
 
@@ -1709,7 +1516,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
     
 
                 except:
-                    print 'Invalid Connection: Register Functional timeseries to MNI space:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                    logConnectionError('Functional Timeseries Registration to MNI space (ANTS)', num_strat, strat.get_resource_pool(), '0016')
                     raise
     
                 strat.update_resource_pool({'functional_mni':(warp_images, 'output_image'),
@@ -1727,20 +1534,34 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
     
 
 
-
     """
     Inserting VMHC
     Workflow
     """
+    
     new_strat_list = []
     num_strat = 0
 
     if 1 in c.runVMHC:
+        
+        if not os.path.exists(c.brainSymmetric):
+            logger.info("\n\n" + ("ERROR: Missing file - %s" % c.brainSymmetric) + "\n\n" + \
+                        "Error name: cpac_pipeline_0017" + "\n\n")
+            raise Exception
+        
+        if not os.path.exists(c.symmStandard):
+            logger.info("\n\n" + ("ERROR: Missing file - %s" % c.symmStandard) + "\n\n" + \
+                        "Error name: cpac_pipeline_0018" + "\n\n")
+            raise Exception
+            
+        
         for strat in strat_list:
-
-            if 'FSL' in c.regOption:
+            
+            nodes = getNodeList(strat)
+            
+            if 'func_mni_fsl_warp' in nodes:
                 preproc = create_vmhc(False)
-            elif 'ANTS' in c.regOption:
+            else:
                 preproc = create_vmhc(True)
 
             preproc.inputs.inputspec.brain_symmetric = \
@@ -1766,10 +1587,11 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                 node, out_file = strat.get_leaf_properties()
                 workflow.connect(node, out_file,
                                  vmhc, 'inputspec.rest_res')
+                
                 node, out_file = strat.get_node_from_resource_pool('functional_to_anat_linear_xfm')
-
                 workflow.connect(node, out_file,
                                  vmhc, 'inputspec.example_func2highres_mat')
+
                 node, out_file = strat.get_node_from_resource_pool('functional_brain_mask')
                 workflow.connect(node, out_file,
                                  vmhc, 'inputspec.rest_mask')
@@ -1787,7 +1609,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                                  vmhc, 'inputspec.mean_functional')
 
             except:
-                print 'Invalid Connection: VMHC:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                logConnectionError('VMHC', num_strat, strat.get_resource_pool(), '0019')
                 raise
 
 
@@ -1804,11 +1626,11 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
 
 
-
     """
     Inserting REHO
     Workflow
     """
+    
     new_strat_list = []
     num_strat = 0
 
@@ -1829,7 +1651,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                 workflow.connect(node, out_file,
                                  reho, 'inputspec.rest_mask')
             except:
-                print 'Invalid Connection: REHO:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                logConnectionError('ReHo', num_strat, strat.get_resource_pool(), '0020')
                 raise
 
 
@@ -1847,14 +1669,17 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
     """
     Transforming ALFF Z scores and fAlff Z scores to MNI
     """
+    
     new_strat_list = []
     num_strat = 0
 
 
     if 1 in c.runRegisterFuncToMNI and (1 in c.runALFF):
         for strat in strat_list:
-
-            if 'FSL' in c.regOption:
+            
+            nodes = getNodeList(strat)
+            
+            if 'func_mni_fsl_warp' in nodes:
 
                 alff_Z_to_standard = pe.Node(interface=fsl.ApplyWarp(),
                                name='alff_Z_to_standard_%d' % num_strat)
@@ -1894,7 +1719,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
 
                 except:
-                    print 'Invalid Connection: Register Functional to MNI:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                    logConnectionError('ALFF to MNI (FSL)', num_strat, strat.get_resource_pool(), '0021')
                     raise
 
                 strat.update_resource_pool({'alff_Z_to_standard':(alff_Z_to_standard, 'out_file')})
@@ -1904,7 +1729,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                 num_strat += 1
 
 
-            elif 'ANTS' in c.regOption:
+            else:
 
                 alff_Z_to_standard = create_apply_ants_xfm(3, 0, name='alff_Z_to_standard_%d' % num_strat)
 
@@ -1970,7 +1795,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
 
                 except:
-                    print 'Invalid Connection: Register Functional to MNI:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                    logConnectionError('ALFF to MNI (ANTS)', num_strat, strat.get_resource_pool(), '0022')
                     raise
 
                 strat.update_resource_pool({'alff_Z_to_standard':(alff_Z_to_standard, 'outputspec.out_file')})
@@ -1985,6 +1810,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
     """    
     Smoothing ALFF fALFF Z scores and or possibly Z scores in MNI 
     """
+    
     new_strat_list = []
     num_strat = 0
     if (1 in c.runALFF) and c.fwhm != None:
@@ -2022,7 +1848,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
 
             except:
-                print 'Invalid Connection: ALFF smooth:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                logConnectionError('ALFF smooth', num_strat, strat.get_resource_pool(), '0023')
                 raise
             strat.append_name(alff_Z_smooth.name)
             strat.update_resource_pool({'alff_Z_smooth':(alff_Z_smooth, 'out_file')})
@@ -2060,8 +1886,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
 
                 except:
-
-                    print 'Invalid Connection: ALFF smooth:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                    logConnectionError('ALFF smooth in MNI', num_strat, strat.get_resource_pool(), '0024')
                     raise
 
                 strat.append_name(alff_Z_to_standard_smooth.name)
@@ -2080,14 +1905,17 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
     """
     Transforming ReHo Z scores to MNI
     """
+    
     new_strat_list = []
     num_strat = 0
 
 
     if 1 in c.runRegisterFuncToMNI and (1 in c.runReHo):
         for strat in strat_list:
-
-            if 'FSL' in c.regOption:
+            
+            nodes = getNodeList(strat)
+            
+            if 'func_mni_fsl_warp' in nodes:
 
                 reho_Z_to_standard = pe.Node(interface=fsl.ApplyWarp(),
                                name='reho_Z_to_standard_%d' % num_strat)
@@ -2110,7 +1938,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                                      reho_Z_to_standard, 'field_file')
 
                 except:
-                    print 'Invalid Connection: Register Functional to MNI:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                    logConnectionError('ReHo to MNI (FSL)', num_strat, strat.get_resource_pool(), '0025')
                     raise
 
                 strat.update_resource_pool({'reho_Z_to_standard':(reho_Z_to_standard, 'out_file')})
@@ -2118,61 +1946,14 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                 num_strat += 1
 
 
-            elif 'ANTS' in c.regOption:
+            else:
                 
                 reho_Z_to_standard = create_apply_ants_xfm(3, 0, name='reho_Z_to_standard_%d' % num_strat)
 
                 reho_Z_to_standard.inputs.inputspec.warp_reference = c.standard
-                '''
 
-                # converts FSL-format .mat affine xfm into ANTS-format .txt
-                # .mat affine comes from Func->Anat registration
-                fsl_reg_2_itk_reho = pe.Node(c3.C3dAffineTool(), name='fsl_reg_2_itk_reho_%d' % num_strat)
-                fsl_reg_2_itk_reho.inputs.itk_transform = True
-                fsl_reg_2_itk_reho.inputs.fsl2ras = True
-
-
-
-                #collects series of transformations to be applied to the moving images
-                collect_transforms_reho = pe.Node(util.Merge(3), name='collect_transforms_reho_%d' % num_strat)
-
-                #performs series of transformations on moving images
-                warp_images_reho = pe.Node(ants.WarpImageMultiTransform(), name='reho_ants_warp_images_%d' % num_strat)
-                warp_images_reho.inputs.reference_image = c.standard
-                warp_images_reho.inputs.dimension = 3
-                '''
                 try:
-                    '''
-                    # MEAN FUNCTIONAL
-
-                    # convert the .mat from linear Func->Anat to ANTS format
-                    node, out_file = strat.get_node_from_resource_pool('functional_to_anat_linear_xfm')
-                    workflow.connect(node, out_file, fsl_reg_2_itk_reho, 'transform_file')
-
-                    node, out_file = strat.get_node_from_resource_pool('anatomical_brain')
-                    workflow.connect(node, out_file, fsl_reg_2_itk_reho, 'reference_file')
-
-                    node, out_file = strat.get_node_from_resource_pool('reho_Z_img')
-                    workflow.connect(node, out_file, fsl_reg_2_itk_reho, 'source_file')
-
-
-                    # Premat from Func->Anat linear reg and bbreg (if bbreg is enabled)
-                    workflow.connect(fsl_reg_2_itk_reho, 'itk_transform', collect_transforms_reho, 'in3')
-    
-                    # Field file from anatomical nonlinear registration
-                    node, out_file = strat.get_node_from_resource_pool('anatomical_to_mni_nonlinear_xfm')
-                    workflow.connect(node, out_file, collect_transforms_reho, 'in1')
-
-                    # affine transformation from anatomical registration
-                    node, out_file = strat.get_node_from_resource_pool('ants_affine_xfm')
-                    workflow.connect(node, out_file, collect_transforms_reho, 'in2')
-
-                    node, out_file = strat.get_node_from_resource_pool('reho_Z_img')
-                    workflow.connect(node, out_file, warp_images_reho, 'input_image')
-
-                    workflow.connect(collect_transforms_reho, 'out', warp_images_reho, 'transformation_series')
-
-                    '''
+                    
                     node, out_file = strat.get_node_from_resource_pool('reho_Z_img')
                     workflow.connect(node, out_file,
                                      reho_Z_to_standard, 'inputspec.in_file')
@@ -2199,7 +1980,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                     
 
                 except:
-                    print 'Invalid Connection: Register Functional to MNI:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                    logConnectionError('ReHo to MNI (ANTS)', num_strat, strat.get_resource_pool(), '0026')
                     raise
 
                 strat.update_resource_pool({'reho_Z_to_standard':(reho_Z_to_standard, 'outputspec.out_file')})#warp_images_reho, 'output_image')})#reho_Z_to_standard, 'outputspec.out_file')})
@@ -2210,9 +1991,11 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
     strat_list += new_strat_list
 
 
+
     """
     Smoothing ReHo Z scores and or possibly Z scores in MNI 
     """
+    
     new_strat_list = []
     num_strat = 0
 
@@ -2236,7 +2019,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                                  reho_Z_smooth, 'operand_files')
 
             except:
-                print 'Invalid Connection: reho_Z smooth:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                logConnectionError('ReHo smooth', num_strat, strat.get_resource_pool(), '0027')
                 raise
             strat.append_name(reho_Z_smooth.name)
             strat.update_resource_pool({'reho_Z_smooth':(reho_Z_smooth, 'out_file')})
@@ -2259,8 +2042,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
 
                 except:
-
-                    print 'Invalid Connection: reho_Z_to_standard smooth:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                    logConnectionError('ReHo smooth in MNI', num_strat, strat.get_resource_pool(), '0028')
                     raise
 
                 strat.append_name(reho_Z_to_standard_smooth.name)
@@ -2269,6 +2051,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
             
             num_strat += 1
     strat_list += new_strat_list
+
 
 
     """
@@ -2280,7 +2063,8 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
     if 1 in c.runSpatialRegression:
 
         for strat in strat_list:
-
+            
+            '''
             resample_functional_to_spatial_map = pe.Node(interface=fsl.FLIRT(),
                                                          name='resample_functional_to_spatial_map_%d' % num_strat)
             resample_functional_to_spatial_map.inputs.interp = 'trilinear'
@@ -2292,6 +2076,12 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
             resample_functional_mask_to_spatial_map.inputs.interp = 'nearestneighbour'
             resample_functional_mask_to_spatial_map.inputs.apply_xfm = True
             resample_functional_mask_to_spatial_map.inputs.in_matrix_file = c.identityMatrix
+            '''
+            resample_spatial_map_to_native_space = pe.Node(interface=fsl.FLIRT(),
+                                                         name='resample_spatial_map_to_native_space%d' % num_strat)
+            resample_spatial_map_to_native_space.inputs.interp = 'nearestneighbour'
+            resample_spatial_map_to_native_space.inputs.apply_xfm = True
+            resample_spatial_map_to_native_space.inputs.in_matrix_file = c.identityMatrix
 
             spatial_map_dataflow = create_spatial_map_dataflow(c.spatialPatternMaps, 'spatial_map_dataflow_%d' % num_strat)
 
@@ -2305,13 +2095,16 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
                 # resample the input functional file and functional mask to spatial map
                 workflow.connect(node, out_file,
-                                 resample_functional_to_spatial_map, 'in_file')
+                                 resample_spatial_map_to_native_space, 'reference')
                 workflow.connect(spatial_map_dataflow, 'select_spatial_map.out_file',
-                                 resample_functional_to_spatial_map, 'reference')
+                                 resample_spatial_map_to_native_space, 'in_file')
+                
+                '''
                 workflow.connect(node2, out_file2,
                                  resample_functional_mask_to_spatial_map, 'in_file')
                 workflow.connect(spatial_map_dataflow, 'select_spatial_map.out_file',
                                  resample_functional_mask_to_spatial_map, 'reference')
+                
 
                 # connect it to the spatial_map_timeseries
                 workflow.connect(spatial_map_dataflow, 'select_spatial_map.out_file',
@@ -2320,11 +2113,20 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                                  spatial_map_timeseries, 'inputspec.subject_mask')
                 workflow.connect(resample_functional_to_spatial_map, 'out_file',
                                  spatial_map_timeseries, 'inputspec.subject_rest')
+                '''
+                
+                                # connect it to the spatial_map_timeseries
+                workflow.connect(resample_spatial_map_to_native_space, 'out_file',
+                                 spatial_map_timeseries, 'inputspec.spatial_map')
+                workflow.connect(node2, out_file2,
+                                 spatial_map_timeseries, 'inputspec.subject_mask')
+                workflow.connect(node, out_file,
+                                 spatial_map_timeseries, 'inputspec.subject_rest')
                                
                 
 
             except:
-                print 'Invalid Connection: Spatial map timeSeries extraction workflow:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                logConnectionError('Spatial map timeseries extraction', num_strat, strat.get_resource_pool(), '0029')
                 raise
 
             if 0 in c.runSpatialRegression:
@@ -2338,15 +2140,16 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
             strat.append_name(spatial_map_timeseries.name)
 
-            strat.update_resource_pool({'spatial_map_timeseries' : (spatial_map_timeseries, 'outputspec.subject_timeseries'),
-                                       'functional_to_spatial_map' : (resample_functional_to_spatial_map, 'out_file'),
-                                       'functional_mask_to_spatial_map' : (resample_functional_mask_to_spatial_map, 'out_file')})
+            strat.update_resource_pool({'spatial_map_timeseries' : (spatial_map_timeseries, 'outputspec.subject_timeseries')})
+                                        #'functional_to_spatial_map' : (resample_functional_to_spatial_map, 'out_file'),
+                                        #'functional_mask_to_spatial_map' : (resample_functional_mask_to_spatial_map, 'out_file')})
             
             create_log_node(spatial_map_timeseries, 'outputspec.subject_timeseries', num_strat)
 
             num_strat += 1
 
     strat_list += new_strat_list
+
 
 
     """
@@ -2387,7 +2190,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                                  voxel_timeseries, 'inputspec.rest')
 
             except:
-                print 'Invalid Connection: Voxel TimeSeries Analysis Workflow:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                logConnectionError('Voxel timeseries analysis', num_strat, strat.get_resource_pool(), '0030')
                 raise
 
             if 0 in c.runVoxelTimeseries:
@@ -2408,7 +2211,6 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
             num_strat += 1
 
     strat_list += new_strat_list
-
 
 
 
@@ -2450,7 +2252,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                                  roi_timeseries, 'inputspec.rest')
 
             except:
-                print 'Invalid Connection: ROI TimeSeries Analysis Workflow:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                logConnectionError('ROI Timeseries analysis', num_strat, strat.get_resource_pool(), '0031')
                 raise
 
             if 0 in c.runROITimeseries:
@@ -2470,6 +2272,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
             num_strat += 1
 
     strat_list += new_strat_list
+
 
 
     """
@@ -2494,7 +2297,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                 workflow.connect(node, (out_file, extract_one_d),
                                  sca_roi, 'inputspec.timeseries_one_d')
             except:
-                print 'Invalid Connection: SCA ROI:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                logConnectionError('SCA ROI', num_strat, strat.get_resource_pool(), '0032')
                 raise
 
 
@@ -2505,7 +2308,9 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
             
             strat.append_name(sca_roi.name)
             num_strat += 1
+            
     strat_list += new_strat_list
+
 
 
     """
@@ -2537,19 +2342,26 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                                  dr_temp_reg, 'inputspec.subject_mask')
 
             except:
-                print 'Invalid Connection: Temporal multiple regression for dual regression:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                logConnectionError('Temporal multiple regression for dual regression', num_strat, strat.get_resource_pool(), '0033')
                 raise
-
 
             strat.update_resource_pool({'dr_tempreg_maps_stack':(dr_temp_reg, 'outputspec.temp_reg_map')})
             strat.update_resource_pool({'dr_tempreg_maps_z_stack':(dr_temp_reg, 'outputspec.temp_reg_map_z'),
                                         'dr_tempreg_maps_z_files':(dr_temp_reg, 'outputspec.temp_reg_map_z_stack')})
+            
             strat.append_name(dr_temp_reg.name)
             
             create_log_node(dr_temp_reg, 'outputspec.temp_reg_map', num_strat)
             
             num_strat += 1
+            
+    elif 1 in c.runDualReg and (0 in c.runSpatialRegression):
+        logger.info("\n\n" + "WARNING: Dual Regression - Spatial regression was turned off for at least one of the strategies.")
+        logger.info("Spatial regression is required for dual regression." + "\n\n")
+            
     strat_list += new_strat_list
+
+
 
     """
     Transforming Dual Regression Z stats to MNI
@@ -2560,8 +2372,10 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
     if 1 in c.runRegisterFuncToMNI and (1 in c.runDualReg) and (1 in c.runSpatialRegression):
         for strat in strat_list:
-
-            if 'FSL' in c.regOption:
+            
+            nodes = getNodeList(strat)
+            
+            if 'func_mni_fsl_warp' in nodes:
 
                 dr_tempreg_stack_Z_to_standard = pe.Node(interface=fsl.ApplyWarp(),
                                name='dr_tempreg_stack_Z_to_standard_%d' % num_strat)
@@ -2619,7 +2433,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
 
                 except:
-                    print 'Invalid Connection: Register Functional to MNI:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                    logConnectionError('Dual regression to MNI (FSL)', num_strat, strat.get_resource_pool(), '0034')
                     raise
 
                 strat.update_resource_pool({'dr_tempreg_maps_z_stack_to_standard':(dr_tempreg_stack_Z_to_standard, 'out_file')})
@@ -2630,9 +2444,9 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                 num_strat += 1
 
 
-            elif 'ANTS' in c.regOption:
+            else:
 
-                dr_tempreg_stack_Z_to_standard = create_apply_ants_xfm(3, 0, 
+                dr_tempreg_stack_Z_to_standard = create_apply_ants_xfm(4, 0, 
                                name='dr_tempreg_stack_Z_to_standard_%d' % num_strat)
                 dr_tempreg_stack_Z_to_standard.inputs.inputspec.warp_reference = c.standard
       
@@ -2666,7 +2480,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                     workflow.connect(node, out_file,
                                      dr_tempreg_stack_Z_to_standard, 'inputspec.conversion_reference')
 
-                    node, out_file = strat.get_node_from_resource_pool('dr_tempreg_maps_z_stack')
+                    node, out_file = strat.get_node_from_resource_pool('mean_functional')
                     workflow.connect(node, out_file,
                                      dr_tempreg_stack_Z_to_standard, 'inputspec.conversion_source')
                 
@@ -2716,13 +2530,13 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                     workflow.connect(node, out_file,
                                      dr_tempreg_stack_to_standard, 'inputspec.conversion_reference')
 
-                    node, out_file = strat.get_node_from_resource_pool('dr_tempreg_maps_stack')
+                    node, out_file = strat.get_node_from_resource_pool('mean_functional')
                     workflow.connect(node, out_file,
                                      dr_tempreg_stack_to_standard, 'inputspec.conversion_source')
 
 
                 except:
-                    print 'Invalid Connection: Register Functional to MNI:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                    logConnectionError('Dual Regression to MNI (ANTS)', num_strat, strat.get_resource_pool(), '0035')
                     raise
 
                 strat.update_resource_pool({'dr_tempreg_maps_z_stack_to_standard':(dr_tempreg_stack_Z_to_standard, 'outputspec.out_file')})
@@ -2760,7 +2574,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                 workflow.connect(node, (out_file, extract_one_d),
                                  sca_seed, 'inputspec.timeseries_one_d')
             except:
-                print 'Invalid Connection: SCA:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                logConnectionError('SCA', num_strat, strat.get_resource_pool(), '0036')
                 raise
 
 
@@ -2769,6 +2583,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
             strat.append_name(sca_seed.name)
             num_strat += 1
     strat_list += new_strat_list
+
 
 
     """
@@ -2799,7 +2614,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                                  sc_temp_reg, 'inputspec.subject_mask')
 
             except:
-                print 'Invalid Connection: Temporal multiple regression for seed based connectivity:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                logConnectionError('Temporal multiple regression for seed based connectivity', num_strat, strat.get_resource_pool(), '0037')
                 raise
 
 
@@ -2812,6 +2627,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
             strat.append_name(sc_temp_reg.name)
             num_strat += 1
     strat_list += new_strat_list
+
 
 
     """
@@ -2864,7 +2680,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                                  sc_temp_reg_maps_Z_files_smooth, 'operand_files')
 
             except:
-                print 'Invalid Connection: sca_tempreg smooth:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                logConnectionError('SCA Temporal regression smooth', num_strat, strat.get_resource_pool(), '0038')
                 raise
             strat.append_name(sc_temp_reg_maps_smooth.name)
             strat.update_resource_pool({'sca_tempreg_maps_stack_smooth':(sc_temp_reg_maps_smooth, 'out_file'),
@@ -2874,6 +2690,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
             create_log_node(sc_temp_reg_maps_smooth, 'out_file', num_strat)
             num_strat += 1
     strat_list += new_strat_list
+
 
 
     """
@@ -2926,7 +2743,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                                  dr_temp_reg_maps_Z_files_smooth, 'operand_files')
 
             except:
-                print 'Invalid Connection: dr_tempreg smooth:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                logConnectionError('Dual regression temp reg smooth', num_strat, strat.get_resource_pool(), '0039')
                 raise
             strat.append_name(dr_temp_reg_maps_smooth.name)
             strat.update_resource_pool({'dr_tempreg_maps_stack_smooth':(dr_temp_reg_maps_smooth, 'out_file'),
@@ -2935,6 +2752,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
             create_log_node(dr_temp_reg_maps_smooth, 'out_file', num_strat)
             num_strat += 1
     strat_list += new_strat_list
+
 
 
     """
@@ -2946,8 +2764,10 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
     if 1 in c.runRegisterFuncToMNI and (1 in c.runSCA) and (1 in c.runVoxelTimeseries):
         for strat in strat_list:
-
-            if 'FSL' in c.regOption:
+            
+            nodes = getNodeList(strat)
+            
+            if 'func_mni_fsl_warp' in nodes:
 
                 sca_seed_Z_to_standard = pe.MapNode(interface=fsl.ApplyWarp(),
                                name='sca_seed_Z_to_standard_%d' % num_strat, iterfield=['in_file'])
@@ -2970,7 +2790,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                                      sca_seed_Z_to_standard, 'field_file')
 
                 except:
-                    print 'Invalid Connection: Register Functional to MNI:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                    logConnectionError('SCA Voxel Z scores to MNI (FSL)', num_strat, strat.get_resource_pool(), '0040')
                     raise
 
                 strat.update_resource_pool({'sca_seed_Z_to_standard':(sca_seed_Z_to_standard, 'out_file')})
@@ -2978,7 +2798,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                 num_strat += 1
 
 
-            elif 'ANTS' in c.regOption:
+            else:
 
                 sca_seed_Z_to_standard = create_apply_ants_xfm(3, 1,
                                name='sca_seed_Z_to_standard_%d' % num_strat)
@@ -3014,7 +2834,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
 
                 except:
-                    print 'Invalid Connection: Register Functional to MNI:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                    logConnectionError('SCA Voxel Z scores to MNI (ANTS)', num_strat, strat.get_resource_pool(), '0041')
                     raise
 
                 strat.update_resource_pool({'sca_seed_Z_to_standard':(sca_seed_Z_to_standard, 'outputspec.out_file')})
@@ -3036,8 +2856,10 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
     if 1 in c.runRegisterFuncToMNI and (1 in c.runSCA) and (1 in c.runROITimeseries):
         for strat in strat_list:
-
-            if 'FSL' in c.regOption:
+            
+            nodes = getNodeList(strat)
+            
+            if 'func_mni_fsl_warp' in nodes:
 
                 sca_roi_Z_to_standard = pe.MapNode(interface=fsl.ApplyWarp(),
                                name='sca_roi_Z_to_standard_%d' % num_strat, iterfield=['in_file'])
@@ -3060,7 +2882,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                                      sca_roi_Z_to_standard, 'field_file')
 
                 except:
-                    print 'Invalid Connection: Register Functional to MNI:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                    logConnectionError('SCA ROI Z scores to MNI (FSL)', num_strat, strat.get_resource_pool(), '0042')
                     raise
 
                 strat.update_resource_pool({'sca_roi_Z_to_standard':(sca_roi_Z_to_standard, 'out_file')})
@@ -3068,7 +2890,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                 num_strat += 1
 
 
-            elif 'ANTS' in c.regOption:
+            else:
 
                 sca_roi_Z_to_standard = create_apply_ants_xfm(3, 1,
                                name='sca_roi_Z_to_standard_%d' % num_strat)
@@ -3103,7 +2925,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                                      sca_roi_Z_to_standard, 'inputspec.conversion_source')
 
                 except:
-                    print 'Invalid Connection: Register Functional to MNI:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                    logConnectionError('SCA ROI Z scores to MNI (ANTS)', num_strat, strat.get_resource_pool(), '0043')
                     raise
 
                 strat.update_resource_pool({'sca_roi_Z_to_standard':(sca_roi_Z_to_standard, 'outputspec.out_file')})
@@ -3116,7 +2938,6 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
 
     """
-    
     Smoothing SCA seed based Z scores and or possibly Z scores in MNI 
     """
     new_strat_list = []
@@ -3142,7 +2963,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                                  sca_seed_Z_smooth, 'operand_files')
 
             except:
-                print 'Invalid Connection: sca_Z smooth:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                logConnectionError('SCA seed Z scores smooth', num_strat, strat.get_resource_pool(), '0044')
                 raise
             strat.append_name(sca_seed_Z_smooth.name)
             strat.update_resource_pool({'sca_seed_Z_smooth':(sca_seed_Z_smooth, 'out_file')})
@@ -3165,8 +2986,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
 
                 except:
-
-                    print 'Invalid Connection: sca_seed_Z_to_standard smooth:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                    logConnectionError('SCA seed Z scores smooth in MNI', num_strat, strat.get_resource_pool(), '0045')
                     raise
 
                 strat.append_name(sca_seed_Z_to_standard_smooth.name)
@@ -3176,8 +2996,8 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
     strat_list += new_strat_list
 
 
+
     """
-    
     Smoothing SCA roi based Z scores and or possibly Z scores in MNI 
     """
     if (1 in c.runSCA) and (1 in c.runROITimeseries) and c.fwhm != None:
@@ -3200,7 +3020,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                                  sca_roi_Z_smooth, 'operand_files')
 
             except:
-                print 'Invalid Connection: sca_Z smooth:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                logConnectionError('SCA ROI Z scores smooth', num_strat, strat.get_resource_pool(), '0046')
                 raise
             strat.append_name(sca_roi_Z_smooth.name)
             strat.update_resource_pool({'sca_roi_Z_smooth':(sca_roi_Z_smooth, 'out_file')})
@@ -3224,8 +3044,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
 
                 except:
-
-                    print 'Invalid Connection: sca_roi_Z_to_standard smooth:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                    logConnectionError('SCA ROI Z scores smooth in MNI', num_strat, strat.get_resource_pool(), '0047')
                     raise
 
                 strat.append_name(sca_roi_Z_smooth.name)
@@ -3261,7 +3080,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                                  surface_reg, 'inputspec.brain')
 
             except:
-                print 'Invalid Connection: Surface Registration Workflow:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                logConnectionError('Surface Registration Workflow', num_strat, strat.get_resource_pool(), '0048')
                 raise
 
             if 0 in c.runSurfaceRegistraion:
@@ -3282,6 +3101,8 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
             num_strat += 1
 
     strat_list += new_strat_list
+
+
 
     """
     Inserting vertices based timeseries
@@ -3305,7 +3126,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                                  vertices_timeseries, 'inputspec.rh_surface_file')
 
             except:
-                print 'Invalid Connection: Vertices Time Series Extraction Workflow:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                logConnectionError('Vertices Timeseries Extraction', num_strat, strat.get_resource_pool(), '0049')
                 raise
 
             if 0 in c.runVerticesTimeSeries:
@@ -3325,6 +3146,8 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
     strat_list += new_strat_list
 
+
+
     """
     Inserting Network centrality
     """
@@ -3334,8 +3157,6 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
     if 1 in c.runNetworkCentrality:
 
         for strat in strat_list:
-
-
 
             resample_functional_to_template = pe.Node(interface=fsl.FLIRT(),
                                                   name='resample_functional_to_template_%d' % num_strat)
@@ -3407,7 +3228,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                     create_log_node(smoothing, 'out_file', num_strat)
 
             except:
-                print 'Invalid Connection: Network Centrality Workflow:', num_strat, ' resource_pool: ', strat.get_resource_pool()
+                logConnectionError('Network Centrality', num_strat, strat.get_resource_pool(), '0050')
                 raise
 
             if 0 in c.runNetworkCentrality:
@@ -3431,7 +3252,6 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
     """
     Quality Control
     """
-
 
     if 1 in c.generateQualityControlImages:
 
@@ -3556,7 +3376,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                         qc_hist_id[3] = 'snr_hist'
 
                 except:
-                    print 'unable to get resources for SNR plot'
+                    logStandardError('QC', 'unable to get resources for SNR plot', '0051')
                     raise
 
 
@@ -3586,7 +3406,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
 
                 except:
-                    print 'unable to get resources for Motion Parameters Plot'
+                    logStandardError('QC', 'unable to get resources for Motion Parameters plot', '0052')
                     raise
 
 
@@ -3614,7 +3434,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
 
                 except:
-                    print 'unable to get resources for FD Plot'
+                    logStandardError('QC', 'unable to get resources for FD plot', '0053')
                     raise
 
 
@@ -3651,8 +3471,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                         qc_montage_id_s[1] = 'skullstrip_vis_s'
 
             except:
-
-                print 'Cannot generate QC montages for Skull Stripping: Resources Not Found'
+                logStandardError('QC', 'Cannot generate QC montages for Skull Stripping: Resources Not Found', '0054')
                 raise
 
 
@@ -3677,8 +3496,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                         qc_montage_id_s[6] = 'mni_normalized_anatomical_s'
 
             except:
-
-                print 'Cannot generate QC montages for mni normalized anatomical: Resources Not Found'
+                logStandardError('QC', 'Cannot generate QC montages for MNI normalized anatomical: Resources Not Found', '0054')
                 raise
 
 
@@ -3714,7 +3532,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                         qc_montage_id_s[2] = 'csf_gm_wm_s'
 
             except:
-                print 'Cannot generate QC montages for WM GM CSF masks: Resources Not Found'
+                logStandardError('QC', 'Cannot generate QC montages for WM GM CSF masks: Resources Not Found', '0055')
                 raise
 
 
@@ -3751,7 +3569,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
 
             except:
-                print 'Cannot generate QC montages for Mean Functional in T1 with T1 edge: Resources Not Found'
+                logStandardError('QC', 'Cannot generate QC montages for Mean Functional in T1 with T1 edge: Resources Not Found', '0056')
                 raise
 
             # make QC montage for Mean Functional in MNI with MNI edge
@@ -3785,7 +3603,7 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
 
             except:
-                print 'Cannot generate QC montages for Mean Functional in MNI with MNI edge: Resources Not Found'
+                logStandardError('QC', 'Cannot generate QC montages for Mean Functional in MNI with MNI edge: Resources Not Found', '0057')
                 raise
 
 
@@ -4281,214 +4099,334 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
 
             num_strat += 1
+            
+                
+    logger.info('\n\n' + 'Pipeline building completed.' + '\n\n')
 
 
 
     ###################### end of workflow ###########
 
-
-    try:
-        workflow.write_graph(graph2use='orig')
-    except:
-        pass
-
-
-    """
-    Datasink
-    """
-    import networkx as nx
-    num_strat = 0
-    sink_idx = 0
-    pip_ids = []
-    
-    wf_names = []
-    scan_ids = ['scan_anat']
-    for id in sub_dict['rest']:
-        scan_ids.append('scan_'+ str(id))
-    
-    for strat in strat_list:
-        rp = strat.get_resource_pool()
-
-        # build helper dictionary to assist with a clean strategy label for symlinks
-
-        strategy_tag_helper_symlinks = {}
- 
-        if any('scrubbing' in name for name in strat.get_name()):
-            strategy_tag_helper_symlinks['_threshold'] = 1
-        else:
-            strategy_tag_helper_symlinks['_threshold'] = 0
-
-        if any('seg_preproc' in name for name in strat.get_name()):
-            strategy_tag_helper_symlinks['_csf_threshold'] = 1
-            strategy_tag_helper_symlinks['_wm_threshold'] = 1
-            strategy_tag_helper_symlinks['_gm_threshold'] = 1
-        else:
-            strategy_tag_helper_symlinks['_csf_threshold'] = 0
-            strategy_tag_helper_symlinks['_wm_threshold'] = 0
-            strategy_tag_helper_symlinks['_gm_threshold'] = 0
-
-
-        if any('median_angle_corr'in name for name in strat.get_name()):
-            strategy_tag_helper_symlinks['_target_angle_deg'] = 1
-        else:
-            strategy_tag_helper_symlinks['_target_angle_deg'] = 0
-
-
-        if any('nuisance'in name for name in strat.get_name()):
-            strategy_tag_helper_symlinks['nuisance'] = 1
-        else:
-            strategy_tag_helper_symlinks['nuisance'] = 0
-
-        strat_tag = ""
-
-        hash_val = 0
-
-        for name in strat.get_name():
-            import re
-            
-            extra_string = re.search('_\d+', name).group(0)
-            
-            if extra_string:
-                name = name.split(extra_string)[0]
-            
-            if workflow_bit_id.get(name) != None:
-                    strat_tag += name + '_'
-                    
-                    print name, ' ~~~ ', 2 ** workflow_bit_id[name]
-                    hash_val += 2 ** workflow_bit_id[name]
-
-        if p_name == None or p_name == 'None':
-            pipeline_id = ''
-            pipeline_id = linecache.getline(os.path.realpath(os.path.join(CPAC.__path__[0], 'utils', 'pipeline_names.py')), hash_val)
-            pipeline_id = pipeline_id.rstrip('\r\n')
-            if pipeline_id == '':
-                print 'hash value ', hash_val, ' is greater than the number of words'
-                print 'resorting to crc32 value as pipeline_id'
-                pipeline_id = zlib.crc32(strat_tag)
-        else:
-            pipeline_id = p_name
-            #if running multiple pipelines with gui, need to change this in future
-            p_name = None
-
-        print 'strat_tag,  ~~~~~ , hash_val,  ~~~~~~ , pipeline_id: ', strat_tag, ' ~~~~~ ', hash_val, ' ~~~~~~ ', pipeline_id
-        pip_ids.append(pipeline_id)
-        wf_names.append(strat.get_name())
-
-        for key in sorted(rp.keys()):
-
-            ds = pe.Node(nio.DataSink(), name='sinker_%d' % sink_idx)
-            ds.inputs.base_directory = c.outputDirectory
-            ds.inputs.container = os.path.join('pipeline_%s' % pipeline_id, subject_id)
-            ds.inputs.regexp_substitutions = [(r"/_sca_roi(.)*[/]", '/'),
-                                              (r"/_smooth_centrality_(\d)+[/]", '/'),
-                                              (r"/_z_score(\d)+[/]", "/"),
-                                              (r"/_dr_tempreg_maps_Z_files_smooth_(\d)+[/]", "/"),
-                                              (r"/_sca_tempreg_maps_Z_files_smooth_(\d)+[/]", "/"),
-                                              (r"/qc___", '/qc/')]
-            node, out_file = rp[key]
-            workflow.connect(node, out_file,
-                             ds, key)
-            print 'node, out_file, key: ', node, out_file, key
-
-            if 1 in c.runSymbolicLinks:
-
-                link_node = pe.Node(interface=util.Function(input_names=['in_file', 'strategies',
-                                        'subject_id', 'pipeline_id', 'helper'],
-                                        output_names=[],
-                                        function=prepare_symbolic_links),
-                                        name='link_%d' % sink_idx)
-               
-                link_node.inputs.strategies = strategies
-                link_node.inputs.subject_id = subject_id
-                link_node.inputs.pipeline_id = 'pipeline_%s' % (pipeline_id)
-                link_node.inputs.helper = dict(strategy_tag_helper_symlinks)
-
-                workflow.connect(ds, 'out_file', link_node, 'in_file')
-            sink_idx += 1
-            print 'sink index: ', sink_idx
-
-        d_name = os.path.join(c.outputDirectory, ds.inputs.container)
-        if not os.path.exists(d_name):
-            os.makedirs(d_name)
-        
+    # Run the pipeline only if the user signifies.
+    # otherwise, only construct the pipeline (above)
+    if run == 1:
 
         try:
-            G = nx.DiGraph()
-            strat_name = strat.get_name()
-            G.add_edges_from([(strat_name[s], strat_name[s + 1]) for s in range(len(strat_name) - 1)])
-            dotfilename = os.path.join(d_name, 'strategy.dot')
-            nx.write_dot(G, dotfilename)
-            format_dot(dotfilename, 'png')
+            workflow.write_graph(graph2use='orig')
         except:
-            print "Cannot Create the strategy and pipeline graph, dot or/and pygraphviz is not installed"
             pass
-
-
-        print d_name, '*'
-        num_strat += 1
-
-    create_log_template(pip_ids, wf_names, scan_ids, subject_id, log_dir)
-
-
-
-    workflow.run(plugin='MultiProc', plugin_args={'n_procs': c.numCoresPerSubject})
-
-    ###workflow.run(plugin='Linear')
-
-    """
-    try:
-
-        workflow.run(plugin='MultiProc', plugin_args={'n_procs': c.numCoresPerSubject})
-
-    except Exception as e:
-
-        print "Error: CPAC Pipeline has failed."
-        print ""
-        print e
-        print type(e)
-        ###raise Exception
-    """
-
-    for count, id in enumerate(pip_ids):
-        for scan in scan_ids:
-            create_log_node(None, None, count, scan).run()
+    
+    
+    
+        ## this section creates names for the different branched strategies.
+        ## it identifies where the pipeline has forked and then appends the name
+        ## of the forked nodes to the branch name in the output directory
+        renamedStrats = []
+        forkPoints = []
+        forkPointsDict = {}
         
-    sub_w_path = os.path.join(c.workingDirectory, wfname)
+        for strat in strat_list:
+            
+            # load list of nodes in this one particular
+            # strat into the list "nodeList"
+            nodeList = strat.name
+            renamedNodesList = []
+            
+            # strip the _n (n being the strat number) from
+            # each node name and return to a list
+            for node in nodeList:
+                
+                renamedNodesList.append(node[:-2])
+                
+            renamedStrats.append(renamedNodesList)
+            
+            
+        for strat in renamedStrats:
+            
+            tmpForkPoint = []
         
+            for nodeName in strat:
+                
+                if nodeName not in renamedStrats[0]:
+                    tmpForkPoint.append(nodeName)
+                
+            forkPoints.append(tmpForkPoint)
+            
+        
+        forkNames = []
+        for forkPoint in forkPoints:
+            
+            forkName = ''
+            
+            for fork in forkPoint:
+                forkName = forkName + '__' + fork
+                
+            forkNames.append(forkName)
+    
+        
+            
+        # match each strat_list with fork point list
+        # this is for the datasink
+        for x in range(len(strat_list)):
+            forkPointsDict[strat_list[x]] = forkNames[x]
+    
+    
+    
+        """
+        Datasink
+        """
+        import networkx as nx
+        num_strat = 0
+        sink_idx = 0
+        pip_ids = []
+        
+        wf_names = []
+        scan_ids = ['scan_anat']
+        for scanID in sub_dict['rest']:
+            scan_ids.append('scan_'+ str(scanID))
+        
+        pipes = []
+        origStrat = 0
+        
+        for strat in strat_list:
+            rp = strat.get_resource_pool()
+    
+            # build helper dictionary to assist with a clean strategy label for symlinks
+    
+            strategy_tag_helper_symlinks = {}
+     
+            if any('scrubbing' in name for name in strat.get_name()):
+                strategy_tag_helper_symlinks['_threshold'] = 1
+            else:
+                strategy_tag_helper_symlinks['_threshold'] = 0
+    
+            if any('seg_preproc' in name for name in strat.get_name()):
+                strategy_tag_helper_symlinks['_csf_threshold'] = 1
+                strategy_tag_helper_symlinks['_wm_threshold'] = 1
+                strategy_tag_helper_symlinks['_gm_threshold'] = 1
+            else:
+                strategy_tag_helper_symlinks['_csf_threshold'] = 0
+                strategy_tag_helper_symlinks['_wm_threshold'] = 0
+                strategy_tag_helper_symlinks['_gm_threshold'] = 0
+    
+    
+            if any('median_angle_corr'in name for name in strat.get_name()):
+                strategy_tag_helper_symlinks['_target_angle_deg'] = 1
+            else:
+                strategy_tag_helper_symlinks['_target_angle_deg'] = 0
+    
+    
+            if any('nuisance'in name for name in strat.get_name()):
+                strategy_tag_helper_symlinks['nuisance'] = 1
+            else:
+                strategy_tag_helper_symlinks['nuisance'] = 0
+    
+            strat_tag = ""
+    
+            hash_val = 0
+    
+            for name in strat.get_name():
+                import re
+                
+                extra_string = re.search('_\d+', name).group(0)
+                
+                if extra_string:
+                    name = name.split(extra_string)[0]
+                
+                if workflow_bit_id.get(name) != None:
+                        strat_tag += name + '_'
+                        
+                        print name, ' ~~~ ', 2 ** workflow_bit_id[name]
+                        hash_val += 2 ** workflow_bit_id[name]
+    
+            if p_name == None or p_name == 'None':
+                
+                if forkPointsDict[strat]:
+                    pipeline_id = c.pipelineName + forkPointsDict[strat]
+                elif origStrat != 1:
+                    pipeline_id = c.pipelineName
+                    origStrat = 1
+                else:
+                    pipeline_id = ''
+                    pipeline_id = linecache.getline(os.path.realpath(os.path.join(CPAC.__path__[0], 'utils', 'pipeline_names.py')), hash_val)
+                    pipeline_id = pipeline_id.rstrip('\r\n')
+                    if pipeline_id == '':
+                        logger.info('hash value %s is greater than the number of words' % hash_val)
+                        logger.info('resorting to crc32 value as pipeline_id')
+                        pipeline_id = zlib.crc32(strat_tag)
+            else:
+                pipeline_id = p_name
+                #if running multiple pipelines with gui, need to change this in future
+                p_name = None
+    
+            logger.info('strat_tag,  ~~~~~ , hash_val,  ~~~~~~ , pipeline_id: %s, ~~~~~ %s, ~~~~~~ %s' % (strat_tag, hash_val, pipeline_id))
+            pip_ids.append(pipeline_id)
+            wf_names.append(strat.get_name())
+    
+            for key in sorted(rp.keys()):
+    
+                ds = pe.Node(nio.DataSink(), name='sinker_%d' % sink_idx)
+                ds.inputs.base_directory = c.outputDirectory
+                ds.inputs.container = os.path.join('pipeline_%s' % pipeline_id, subject_id)
+                ds.inputs.regexp_substitutions = [(r"/_sca_roi(.)*[/]", '/'),
+                                                  (r"/_smooth_centrality_(\d)+[/]", '/'),
+                                                  (r"/_z_score(\d)+[/]", "/"),
+                                                  (r"/_dr_tempreg_maps_Z_files_smooth_(\d)+[/]", "/"),
+                                                  (r"/_sca_tempreg_maps_Z_files_smooth_(\d)+[/]", "/"),
+                                                  (r"/qc___", '/qc/')]
+                node, out_file = rp[key]
+                workflow.connect(node, out_file,
+                                 ds, key)
+                logger.info('node, out_file, key: %s, %s, %s' % (node, out_file, key))
+    
+                if 1 in c.runSymbolicLinks:
+    
+                    link_node = pe.Node(interface=util.Function(input_names=['in_file', 'strategies',
+                                            'subject_id', 'pipeline_id', 'helper'],
+                                            output_names=[],
+                                            function=prepare_symbolic_links),
+                                            name='link_%d' % sink_idx)
+                   
+                    link_node.inputs.strategies = strategies
+                    link_node.inputs.subject_id = subject_id
+                    link_node.inputs.pipeline_id = 'pipeline_%s' % (pipeline_id)
+                    link_node.inputs.helper = dict(strategy_tag_helper_symlinks)
+    
+                    workflow.connect(ds, 'out_file', link_node, 'in_file')
+                sink_idx += 1
+                logger.info('sink index: %s' % sink_idx)
+    
+            d_name = os.path.join(c.outputDirectory, ds.inputs.container)
+            if not os.path.exists(d_name):
+                os.makedirs(d_name)
+            
+    
+            try:
+                G = nx.DiGraph()
+                strat_name = strat.get_name()
+                G.add_edges_from([(strat_name[s], strat_name[s + 1]) for s in range(len(strat_name) - 1)])
+                dotfilename = os.path.join(d_name, 'strategy.dot')
+                nx.write_dot(G, dotfilename)
+                format_dot(dotfilename, 'png')
+            except:
+                logStandardWarning('Datasink', 'Cannot Create the strategy and pipeline graph, dot or/and pygraphviz is not installed')
+                pass
+    
+    
+            logger.info('%s*' % d_name)
+            num_strat += 1
+            
+            pipes.append(pipeline_id)
+    
+    
+        # creates the HTML files used to represent the logging-based status
+        create_log_template(pip_ids, wf_names, scan_ids, subject_id, log_dir)
+    
+    
+        sub_w_path = os.path.join(c.workingDirectory, wfname)
+    
+        if c.removeWorkingDir:
+            try:
+                if os.path.exists(sub_w_path):
+                    import shutil
+                    logger.info("removing dir -> %s" % sub_w_path)
+                    shutil.rmtree(sub_w_path)
+            except:
+                logStandardWarning('Datasink', ('Couldn\'t remove subjects %s working directory' % wfname))
+                pass
 
-    if 1 in c.generateQualityControlImages:
-
-        for pip_id in pip_ids:
-
-            f_path = os.path.join(os.path.join(c.outputDirectory, 'pipeline_' + pip_id), subject_id)
-
-            f_path = os.path.join(f_path, 'qc_files_here')
-
-            generateQCPages(f_path, qc_montage_id_a, qc_montage_id_s, qc_plot_id, qc_hist_id)
+    
+        logger.info('\n\n' + ('Strategy forks: %s' % pipes) + '\n\n')
 
 
-        ### Automatically generate QC index page
-        create_all_qc.run(c.outputDirectory)
-
-
-
-    if c.removeWorkingDir:
+        # Timing code for cpac_timing_<pipeline>.txt in output directory
+        timing = open(os.path.join(c.outputDirectory, 'cpac_timing_%s.txt' % c.pipelineName), 'a')
+    
+        # Start timing here
+        pipeline_start_time = time.time()
+        pipeline_start_datetime = strftime("%Y-%m-%d %H:%M:%S")
+        print >>timing, "Starting CPAC run at system time: ", strftime("%Y-%m-%d %H:%M:%S")
+        print >>timing, "Pipeline configuration: ", c.pipelineName
+        print >>timing, "Subject workflow: ", wfname
+        print >>timing, "\n"
+    
+    
+        # Actually run the pipeline now
         try:
-            if os.path.exists(sub_w_path):
-                import shutil
-                print "removing dir -> ", sub_w_path
-                shutil.rmtree(sub_w_path)
+
+            workflow.run(plugin='MultiProc', plugin_args={'n_procs': c.numCoresPerSubject})
+            
         except:
-            print "Couldn't remove subjects %s working directory" % (wfname)
-            pass
+            
+            crashString = "\n\n" + "ERROR: CPAC run stopped prematurely with an error - see above.\n" + ("pipeline configuration- %s \n" % c.pipelineName) + \
+            ("subject workflow- %s \n\n" % wfname) + ("Elapsed run time before crash (minutes): %s \n\n" % ((time.time() - pipeline_start_time)/60)) + \
+            ("Timing information saved in %s/cpac_timing_%s.txt \n" % (c.outputDirectory, c.pipelineName)) + \
+            ("System time of start:      %s \n" % pipeline_start_datetime) + ("System time of crash: %s" % strftime("%Y-%m-%d %H:%M:%S")) + "\n\n"
+            
+            logger.info(crashString)
+                 
+            print >>timing, "ERROR: CPAC run stopped prematurely with an error."
+            print >>timing, "Pipeline configuration: %s" % c.pipelineName
+            print >>timing, "Subject workflow: %s" % wfname
+            print >>timing, "\n" + "Elapsed run time before crash (minutes): ", ((time.time() - pipeline_start_time)/60)
+            print >>timing, "System time of crash: ", strftime("%Y-%m-%d %H:%M:%S")
+            print >>timing, "\n\n"
+    
+            timing.close()
+            
+            raise Exception     
+    
+    
+        """
+        try:
+    
+            workflow.run(plugin='MultiProc', plugin_args={'n_procs': c.numCoresPerSubject})
+    
+        except Exception as e:
+    
+            print "Error: CPAC Pipeline has failed."
+            print ""
+            print e
+            print type(e)
+            ###raise Exception
+        """
+    
+        for count, scanID in enumerate(pip_ids):
+            for scan in scan_ids:
+                create_log_node(None, None, count, scan).run()
+            
+            
+    
+        if 1 in c.generateQualityControlImages:
+    
+            for pip_id in pip_ids:
+    
+                f_path = os.path.join(os.path.join(c.outputDirectory, 'pipeline_' + pip_id), subject_id)
+    
+                f_path = os.path.join(f_path, 'qc_files_here')
+    
+                generateQCPages(f_path, qc_montage_id_a, qc_montage_id_s, qc_plot_id, qc_hist_id)
+    
+    
+            ### Automatically generate QC index page
+            create_all_qc.run(c.outputDirectory)       
+        
+        endString = ("End of subject workflow %s \n\n" % wfname) + "CPAC run complete:\n" + ("pipeline configuration- %s \n" % c.pipelineName) + \
+        ("subject workflow- %s \n\n" % wfname) + ("Elapsed run time (minutes): %s \n\n" % ((time.time() - pipeline_start_time)/60)) + \
+        ("Timing information saved in %s/cpac_timing_%s.txt \n" % (c.outputDirectory, c.pipelineName)) + \
+        ("System time of start:      %s \n" % pipeline_start_datetime) + ("System time of completion: %s" % strftime("%Y-%m-%d %H:%M:%S"))
+    
+        logger.info(endString)
+    
+        print >>timing, "CPAC run complete:"
+        print >>timing, "pipeline configuration- %s" % c.pipelineName
+        print >>timing, "subject workflow- %s" % wfname
+        print >>timing, "\n" + "Elapsed run time (minutes): ", ((time.time() - pipeline_start_time)/60)
+        print >>timing, "System time of completion: ", strftime("%Y-%m-%d %H:%M:%S")
+        print >>timing, "\n\n"
+    
+        timing.close()
 
-    print "End of subject workflow ", wfname
-
-    print >>timing, "CPAC run complete."
-    print >>timing, "Elapsed run time (minutes): ", ((time.time() - pipeline_start_time)/60)
-    print >>timing, ""
-
-    timing.close()
 
     return workflow
 
@@ -4499,9 +4437,6 @@ def run(config, subject_list_file, indx, strategies, \
      maskSpecificationFile, roiSpecificationFile, templateSpecificationFile, p_name = None):
     import commands
     commands.getoutput('source ~/.bashrc')
-    import os
-    import sys
-    import argparse
     import pickle
     import yaml
 
@@ -4520,4 +4455,7 @@ def run(config, subject_list_file, indx, strategies, \
     c.roiSpecificationFile = roiSpecificationFile
     c.templateSpecificationFile = templateSpecificationFile
 
-    prep_workflow(sub_dict, c, pickle.load(open(strategies, 'r')), p_name)
+    
+    prep_workflow(sub_dict, c, pickle.load(open(strategies, 'r')), 1, p_name)
+
+
