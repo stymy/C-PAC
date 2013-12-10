@@ -96,6 +96,9 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
     timing = open(os.path.join(c.outputDirectory, 'cpac_pipeline_timing.txt'), 'wt')
 
+    print >>timing, "Starting CPAC run for configuration: ", c
+    print >>timing, "\n"
+
     # Start timing here
     pipeline_start_time = time.time()
 
@@ -163,15 +166,25 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
     workflow_bit_id = {}
     workflow_counter = 0
 
+
     """
     Initialize Anatomical Input Data Flow
     """
+
+    print >>timing, "Starting 'Initalize Anatomical Input Data Flow'.."
+    print >>timing, "configuration parameter: 'runAnatomicalDataGathering'"
+    print >>timing, "workflow: create_anat_datasource()"
+
     new_strat_list = []
     num_strat = 0
 
     strat_initial = None
 
     for gather_anat in c.runAnatomicalDataGathering:
+
+        print >>timing, "gather_anat: ", gather_anat
+        workflow_start_time = time.time()
+
         strat_initial = strategy()
 
         if gather_anat == 1:
@@ -187,7 +200,13 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
         strat_list.append(strat_initial)
 
+        print >>timing, "run time (minutes): ", ((time.time() - workflow_start_time)/60)
+        print >>timing, "\n"
+
     print strat_list
+
+    
+
 
     """
     Inserting Anatomical Preprocessing workflow
@@ -197,9 +216,17 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
     if 1 in c.runAnatomicalPreprocessing:
 
+        print >>timing, "Starting 'Inserting Anatomical Preprocessing Workflow'.."
+        print >>timing, "configuration parameter: 'runAnatomicalPreprocessing'"
+        print >>timing, "workflow: create_anat_preproc()"
+
         workflow_bit_id['anat_preproc'] = workflow_counter
 
         for strat in strat_list:
+
+            print >>timing, "strat: ", strat
+            workflow_start_time = time.time()
+
             # create a new node, Remember to change its name!
             anat_preproc = create_anat_preproc().clone('anat_preproc_%d' % num_strat)
 
@@ -238,7 +265,11 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
             num_strat += 1
 
+            print >>timing, "run time (minutes): ", ((time.time() - workflow_start_time)/60)
+            print >>timing, "\n"
+
     strat_list += new_strat_list
+
 
 
 
@@ -251,7 +282,6 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
     workflow_counter += 1
     
     # either run FSL anatomical-to-MNI registration, or...
-    
     if 1 in c.runRegistrationPreprocessing:
 
         workflow_bit_id['anat_mni_register'] = workflow_counter
@@ -329,7 +359,6 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                     # pass the reference file           
                     ants_reg_anat_mni.inputs.inputspec.reference_brain = c.standardResolutionBrainAnat
                 
-
                 except:
                     print 'Invalid Connection: Anatomical Registration:', num_strat, ' resource_pool: ', strat.get_resource_pool()
                     raise
@@ -366,16 +395,22 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
     
     
  
+
     """
     Inserting Segmentation Preprocessing
     Workflow
     """
-
+    
     new_strat_list = []
     num_strat = 0
 
     workflow_counter += 1
     if 1 in c.runSegmentationPreprocessing:
+
+        print >>timing, "Starting 'Inserting Segmentation Preprocessing Workflow'.."
+        print >>timing, "configuration parameter: 'runSegmentationPreprocessing'"
+        print >>timing, "workflow: create_seg_preproc()"
+
         workflow_bit_id['seg_preproc'] = workflow_counter
         for strat in strat_list:
 
@@ -442,16 +477,32 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
             create_log_node(seg_preproc, 'outputspec.partial_volume_map', num_strat)
             num_strat += 1
 
+            print >>timing, "run time (minutes): ", ((time.time() - workflow_start_time)/60)
+            print >>timing, "\n"
+
     strat_list += new_strat_list
+
+
+
 
     """
     Inserting Functional Input Data workflow
     """
+
     new_strat_list = []
     num_strat = 0
 
     if 1 in c.runFunctionalDataGathering:
+
+        print >>timing, "Starting 'Inserting Functional Input Data Workflow'.."
+        print >>timing, "configuration parameter: 'runFunctionalDataGathering'"
+        print >>timing, "workflow: create_func_datasource()"
+
         for strat in strat_list:
+
+            print >>timing, "strat: ", strat
+            workflow_start_time = time.time()
+
             # create a new node, Remember to change its name!
             # Flow = create_func_datasource(sub_dict['rest'])
             # Flow.inputs.inputnode.subject = subject_id
@@ -472,20 +523,34 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
             num_strat += 1
 
+            print >>timing, "run time (minutes): ", ((time.time() - workflow_start_time)/60)
+            print >>timing, "\n"
+
     strat_list += new_strat_list
+
+
 
 
     """
     Inserting Functional Image Preprocessing
     Workflow
     """
+
     new_strat_list = []
     num_strat = 0
 
     workflow_counter += 1
     if 1 in c.runFunctionalPreprocessing:
+
+        print >>timing, "Starting 'Inserting Functional Image Preprocessing'.."
+        print >>timing, "configuration parameter: 'runFunctionalPreprocessing'"
+        print >>timing, "workflow: create_func_preproc()"
+
         workflow_bit_id['func_preproc'] = workflow_counter
         for strat in strat_list:
+
+            print >>timing, "strat: ", strat
+            workflow_start_time = time.time()
 
             slice_timing = sub_dict.get('scan_parameters')
             # a node which checks if scan _parameters are present for each scan
@@ -585,8 +650,12 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
             create_log_node(func_preproc, 'outputspec.preprocessed', num_strat)
             num_strat += 1
 
+            print >>timing, "run time (minutes): ", ((time.time() - workflow_start_time)/60)
+            print >>timing, "\n"
+
             
     strat_list += new_strat_list
+
 
 
 
@@ -597,13 +666,22 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
     that depend on. The effect should be seen when regressing out nuisance signals and motion
     is used as one of the regressors
     """
+    
     new_strat_list = []
     num_strat = 0
 
     workflow_counter += 1
     if 1 in c.runFristonModel:
+
+        print >>timing, "Starting 'Inserting Friston's 24 parameter Workflow'.."
+        print >>timing, "configuration parameter: 'runFristonModel'"
+        print >>timing, "workflow: fristons_twenty_four()"
+
         workflow_bit_id['fristons_parameter_model'] = workflow_counter
         for strat in strat_list:
+
+            print >>timing, "strat: ", strat
+            workflow_start_time = time.time()
 
             fristons_model = fristons_twenty_four(wf_name='fristons_parameter_model_%d' % num_strat)
 
@@ -633,7 +711,12 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
             create_log_node(fristons_model, 'outputspec.movement_file', num_strat)
             
             num_strat += 1
+
+            print >>timing, "run time (minutes): ", ((time.time() - workflow_start_time)/60)
+            print >>timing, "\n"
+
     strat_list += new_strat_list
+
 
 
 
@@ -898,8 +981,17 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
     workflow_counter += 1
     
     if 1 in c.runRegisterFuncToAnat:
+
+        print >>timing, "Starting 'Func -> T1 Registration (BBREG)'.."
+        print >>timing, "configuration parameter: 'runRegisterFuncToAnat'"
+        print >>timing, "workflow: create_bbregister_func_to_anat()"
+
         workflow_bit_id['func_to_anat'] = workflow_counter
         for strat in strat_list:
+
+            print >>timing, "strat: ", strat
+            workflow_start_time = time.time()
+
             func_to_anat = create_bbregister_func_to_anat('func_to_anat_%d' % num_strat)
        
             # Input registration parameters
@@ -975,8 +1067,12 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
             #create_log_node(func_to_anat, 'outputspec.mni_func', num_strat)
             num_strat += 1
 
+            print >>timing, "run time: ", int(((time.time() - workflow_start_time)/60)), " min, ", (time.time() - workflow_start_time), " sec"
+            print >>timing, "\n"
+
     strat_list += new_strat_list
     """
+
 
 
     """
@@ -987,8 +1083,16 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
     workflow_counter += 1
     if 1 in c.runGenerateMotionStatistics:
+
+        print >>timing, "Starting 'Inserting Generate Motion Statistics Workflow'.."
+        print >>timing, "configuration parameter: 'runGenerateMotionStatistics'"
+        print >>timing, "workflow: motion_power_statistics()"
+
         workflow_bit_id['gen_motion_stats'] = workflow_counter
         for strat in strat_list:
+
+            print >>timing, "strat: ", strat
+            workflow_start_time = time.time()
 
             gen_motion_stats = motion_power_statistics('gen_motion_stats_%d' % num_strat)
             gen_motion_stats.inputs.scrubbing_input.threshold = c.scrubbingThreshold
@@ -1045,7 +1149,12 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
             create_log_node(gen_motion_stats, 'outputspec.motion_params', num_strat)
             num_strat += 1
 
+            print >>timing, "run time: ", int(((time.time() - workflow_start_time)/60)), " min, ", (time.time() - workflow_start_time), " sec"
+            print >>timing, "\n"
+
     strat_list += new_strat_list
+
+
 
 
     """
@@ -1056,6 +1165,11 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
     workflow_counter += 1
     if 1 in c.runNuisance:
+
+        print >>timing, "Starting 'Inserting Nuisance Workflow'.."
+        print >>timing, "configuration parameter: 'runNuisance'"
+        print >>timing, "workflow: create_nuisance()"
+
         workflow_bit_id['nuisance'] = workflow_counter
         for strat in strat_list:
 
@@ -1063,7 +1177,6 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
                 nuisance = create_nuisance(False, 'nuisance_%d' % num_strat)
             elif 'ANTS' in c.regOption:
                 nuisance = create_nuisance(True, 'nuisance_%d' % num_strat)
-
 
             nuisance.get_node('residuals').iterables = ([('selector', c.Corrections),
                                                          ('compcor_ncomponents', c.nComponents)])
@@ -1130,7 +1243,13 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
             
             num_strat += 1
 
+            print >>timing, "run time: ", int(((time.time() - workflow_start_time)/60)), " min, ", (time.time() - workflow_start_time), " sec"
+            print >>timing, "\n"
+
     strat_list += new_strat_list
+
+
+
 
     """
     Inserting Median Angle Correction Workflow
@@ -1140,8 +1259,17 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
     workflow_counter += 1
     if 1 in c.runMedianAngleCorrection:
+
+        print >>timing, "Starting 'Inserting Median Angle Correction Workflow'.."
+        print >>timing, "configuration parameter: 'runMedianAngleCorrection'"
+        print >>timing, "workflow: create_median_angle_correction()"
+
         workflow_bit_id['median_angle_corr'] = workflow_counter
         for strat in strat_list:
+
+            print >>timing, "strat: ", strat
+            workflow_start_time = time.time()
+
             median_angle_corr = create_median_angle_correction('median_angle_corr_%d' % num_strat)
 
             median_angle_corr.get_node('median_angle_correct').iterables = ('target_angle_deg', c.targetAngleDeg)
@@ -1172,7 +1300,13 @@ def prep_workflow(sub_dict, c, strategies, p_name=None):
 
             num_strat += 1
 
+            print >>timing, "run time: ", int(((time.time() - workflow_start_time)/60)), " min, ", (time.time() - workflow_start_time), " sec"
+            print >>timing, "\n"
+
     strat_list += new_strat_list
+
+
+
 
     """
     Inserting ALFF/fALFF
