@@ -5,6 +5,7 @@ parallelEnvironment,SGE Parallel Environment,Computer Settings
 queue,SGE Queue,Computer Settings
 numCoresPerSubject,Number of Cores Per Subject,Computer Settings
 numSubjectsAtOnce,Number of Subjects to Run Simultaneously,Computer Settings
+pipelineName,Pipeline Name,Output Settings
 workingDirectory,Working Directory,Output Settings
 crashLogDirectory,Crash Log Directory,Output Settings
 outputDirectory,Output Directory,Output Settings

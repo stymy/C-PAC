@@ -1,5 +1,6 @@
 import sys
-from CPAC.interfaces.afni import preprocess
+#from CPAC.interfaces.afni import preprocess
+from nipype.interfaces.afni import preprocess
 import os
 import commands
 import nipype.pipeline.engine as pe
@@ -258,16 +259,16 @@ def create_temporal_reg(wflow_name='temporal_reg', which='SR'):
     wflow.connect(inputNode, 'subject_timeseries',
                   check_timeseries, 'in_file')
 
-    temporalReg = pe.Node(interface=fsl.FSLGLM(),
+    temporalReg = pe.Node(interface=fsl.GLM(),
                           name='temporal_regression')
 
-    temporalReg.inputs.output_file = 'temp_reg_map.nii.gz'
+    temporalReg.inputs.out_file = 'temp_reg_map.nii.gz'
     temporalReg.inputs.out_z_name = 'temp_reg_map_z.nii.gz'
 
     wflow.connect(inputNode, 'subject_rest',
                   temporalReg, 'in_file')
     wflow.connect(check_timeseries, 'out_file',
-                  temporalReg, 'design_file')
+                  temporalReg, 'design')
     wflow.connect(inputNode, 'demean',
                   temporalReg, 'demean')
     wflow.connect(inputNode, 'normalize',
