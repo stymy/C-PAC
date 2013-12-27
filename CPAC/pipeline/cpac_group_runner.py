@@ -276,23 +276,44 @@ def run(config_file, output_path_file):
                         run_pbs_jobs(c, config_file, resource, analysis_map[(resource, glob_key)])
 
 
-            if 1 in c.runCWAS:
-
+            if 1 in c.runCWAS and 0 in c.cwas['smoothed']:
+                
                 if not c.runOnGrid:
-
                     from CPAC.pipeline.cpac_cwas_pipeline import prep_cwas_workflow
                     prep_cwas_workflow(c, analysis_map[(resource, glob_key)])
 
                 else:
                     if 'sge' in c.resourceManager.lower():
                         run_sge_jobs(c, config_file, resource, analysis_map[(resource, glob_key)])
-
                     elif 'pbs' in c.resourceManager.lower():
                         run_pbs_jobs(c, config_file, resource, analysis_map[(resource, glob_key)])
 
             print >>timing, "Group analysis workflow completed for resource: ", resource
             print >>timing, "Elapsed run time (minutes): ", ((time.time() - wf_start_time)/60)
             print >>timing, ""
+        
+        if resource == 'functional_mni_smooth':
+            
+            wf_start_time = time.time()
+            
+            if 1 in c.runCWAS and 1 in c.cwas['smoothed']:
+                
+                if not c.runOnGrid:
+                    from CPAC.pipeline.cpac_cwas_pipeline import prep_cwas_workflow
+                    prep_cwas_workflow(c, analysis_map[(resource, glob_key)])
+
+                else:
+                    if 'sge' in c.resourceManager.lower():
+                        run_sge_jobs(c, config_file, resource, analysis_map[(resource, glob_key)])
+                    elif 'pbs' in c.resourceManager.lower():
+                        run_pbs_jobs(c, config_file, resource, analysis_map[(resource, glob_key)])
+            
+            print >>timing, "Group analysis workflow completed for resource: ", resource
+            print >>timing, "Elapsed run time (minutes): ", ((time.time() - wf_start_time)/60)
+            print >>timing, ""
+            
+            
+            
 
 
 
