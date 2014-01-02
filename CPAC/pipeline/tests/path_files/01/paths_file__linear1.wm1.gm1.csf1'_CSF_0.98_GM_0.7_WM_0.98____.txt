@@ -1,0 +1,17 @@
+/home/data/Projects/CPAC_Regression_Test/2013-08-19-20_v0-3-1/output/pipeline_2013-08-26-nuisance-test/0102157/anatomical_reorient/mprage_RPI_RPI.nii.gz
+/home/data/Projects/CPAC_Regression_Test/2013-08-19-20_v0-3-1/output/pipeline_2013-08-26-nuisance-test/0102157/anatomical_brain/mprage_RPI_RPI_3dc.nii.gz
+/home/data/Projects/CPAC_Regression_Test/2013-08-19-20_v0-3-1/output/pipeline_2013-08-26-nuisance-test/0102157/anatomical_to_mni_linear_xfm/mprage_RPI_RPI_3dc_flirt.mat
+/home/data/Projects/CPAC_Regression_Test/2013-08-19-20_v0-3-1/output/pipeline_2013-08-26-nuisance-test/0102157/seg_probability_maps/segment_prob_0.nii.gz
+/home/data/Projects/CPAC_Regression_Test/2013-08-19-20_v0-3-1/output/pipeline_2013-08-26-nuisance-test/0102157/seg_probability_maps/segment_prob_1.nii.gz
+/home/data/Projects/CPAC_Regression_Test/2013-08-19-20_v0-3-1/output/pipeline_2013-08-26-nuisance-test/0102157/seg_probability_maps/segment_prob_2.nii.gz
+/home/data/Projects/CPAC_Regression_Test/2013-08-19-20_v0-3-1/output/pipeline_2013-08-26-nuisance-test/0102157/seg_partial_volume_files/segment_pve_0.nii.gz
+/home/data/Projects/CPAC_Regression_Test/2013-08-19-20_v0-3-1/output/pipeline_2013-08-26-nuisance-test/0102157/seg_partial_volume_files/segment_pve_1.nii.gz
+/home/data/Projects/CPAC_Regression_Test/2013-08-19-20_v0-3-1/output/pipeline_2013-08-26-nuisance-test/0102157/seg_partial_volume_files/segment_pve_2.nii.gz
+/home/data/Projects/CPAC_Regression_Test/2013-08-19-20_v0-3-1/output/pipeline_2013-08-26-nuisance-test/0102157/seg_partial_volume_map/segment_pveseg.nii.gz
+/home/data/Projects/CPAC_Regression_Test/2013-08-19-20_v0-3-1/output/pipeline_2013-08-26-nuisance-test/0102157/seg_mixeltype/segment_mixeltype.nii.gz
+/home/data/Projects/CPAC_Regression_Test/2013-08-19-20_v0-3-1/output/pipeline_2013-08-26-nuisance-test/0102157/mni_to_anatomical_linear_xfm/mprage_RPI_RPI_3dc_flirt_inv.mat
+/home/data/Projects/CPAC_Regression_Test/2013-08-19-20_v0-3-1/output/pipeline_2013-08-26-nuisance-test/0102157/anatomical_to_mni_nonlinear_xfm/mprage_RPI_RPI_fieldwarp.nii.gz
+/home/data/Projects/CPAC_Regression_Test/2013-08-19-20_v0-3-1/output/pipeline_2013-08-26-nuisance-test/0102157/mni_normalized_anatomical/mprage_RPI_RPI_3dc_warp.nii.gz
+/home/data/Projects/CPAC_Regression_Test/2013-08-19-20_v0-3-1/output/pipeline_2013-08-26-nuisance-test/0102157/anatomical_csf_mask/_csf_threshold_0.98/segment_prob_0_maths_maths_maths.nii.gz
+/home/data/Projects/CPAC_Regression_Test/2013-08-19-20_v0-3-1/output/pipeline_2013-08-26-nuisance-test/0102157/anatomical_wm_mask/_wm_threshold_0.98/segment_prob_2_maths_maths_maths.nii.gz
+/home/data/Projects/CPAC_Regression_Test/2013-08-19-20_v0-3-1/output/pipeline_2013-08-26-nuisance-test/0102157/anatomical_gm_mask/_gm_threshold_0.7/segment_prob_1_maths_maths_maths.nii.gz
