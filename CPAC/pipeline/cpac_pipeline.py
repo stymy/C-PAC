@@ -539,105 +539,225 @@ def prep_workflow(sub_dict, c, strategies, run, pipeline_timing_info=None, p_nam
         workflow_bit_id['func_preproc'] = workflow_counter
         for strat in strat_list:
 
-            slice_timing = sub_dict.get('scan_parameters')
-            # a node which checks if scan _parameters are present for each scan
-            scan_params = pe.Node(util.Function(input_names=['subject',
-                                                             'scan',
-                                                             'subject_map',
-                                                             'start_indx',
-                                                             'stop_indx'],
-                                               output_names=['tr',
-                                                             'tpattern',
-                                                             'ref_slice',
-                                                             'start_indx',
-                                                             'stop_indx'],
-                                               function=get_scan_params),
-                                 name='scan_params_%d' % num_strat)
+            if '3dAutoMask' in c.functionalMasking:
 
-            convert_tr = pe.Node(util.Function(input_names=['tr'],
-                                               output_names=['tr'],
-                                               function=get_tr),
-                                 name='convert_tr_%d' % num_strat)
+                slice_timing = sub_dict.get('scan_parameters')
+                # a node which checks if scan _parameters are present for each scan
+                scan_params = pe.Node(util.Function(input_names=['subject',
+                                                                 'scan',
+                                                                 'subject_map',
+                                                                 'start_indx',
+                                                                 'stop_indx'],
+                                                   output_names=['tr',
+                                                                 'tpattern',
+                                                                 'ref_slice',
+                                                                 'start_indx',
+                                                                 'stop_indx'],
+                                                   function=get_scan_params),
+                                     name='scan_params_%d' % num_strat)
 
-            # if scan parameters are available slice timing correction is
-            # turned on
-            if slice_timing:
+                convert_tr = pe.Node(util.Function(input_names=['tr'],
+                                                   output_names=['tr'],
+                                                   function=get_tr),
+                                     name='convert_tr_%d' % num_strat)
 
-                func_preproc = create_func_preproc(slice_timing_correction=True, wf_name='func_preproc_%d' % num_strat)
+                # if scan parameters are available slice timing correction is
+                # turned on
+                if slice_timing:
 
-                # getting the scan parameters
-                workflow.connect(funcFlow, 'outputspec.subject',
-                                 scan_params, 'subject')
-                workflow.connect(funcFlow, 'outputspec.scan',
-                                 scan_params, 'scan')
-                scan_params.inputs.subject_map = sub_dict
-                scan_params.inputs.start_indx = c.startIdx
-                scan_params.inputs.stop_indx = c.stopIdx
+                    func_preproc = create_func_preproc(slice_timing_correction=True, \
+                                                       use_bet=False, \
+                                                       wf_name='func_preproc_automask_%d' % num_strat)
 
-                # passing the slice timing correction parameters
-                workflow.connect(scan_params, 'tr',
-                                 func_preproc, 'scan_params.tr')
-                workflow.connect(scan_params, 'ref_slice',
-                                 func_preproc, 'scan_params.ref_slice')
-                workflow.connect(scan_params, 'tpattern',
-                                 func_preproc, 'scan_params.acquisition')
+                    # getting the scan parameters
+                    workflow.connect(funcFlow, 'outputspec.subject',
+                                     scan_params, 'subject')
+                    workflow.connect(funcFlow, 'outputspec.scan',
+                                     scan_params, 'scan')
+                    scan_params.inputs.subject_map = sub_dict
+                    scan_params.inputs.start_indx = c.startIdx
+                    scan_params.inputs.stop_indx = c.stopIdx
 
-                workflow.connect(scan_params, 'start_indx',
-                                 func_preproc, 'inputspec.start_idx')
-                workflow.connect(scan_params, 'stop_indx',
-                                 func_preproc, 'inputspec.stop_idx')
+                    # passing the slice timing correction parameters
+                    workflow.connect(scan_params, 'tr',
+                                     func_preproc, 'scan_params.tr')
+                    workflow.connect(scan_params, 'ref_slice',
+                                     func_preproc, 'scan_params.ref_slice')
+                    workflow.connect(scan_params, 'tpattern',
+                                     func_preproc, 'scan_params.acquisition')
 
-                workflow.connect(scan_params, 'tr',
-                                 convert_tr, 'tr')
-            else:
-                func_preproc = create_func_preproc(slice_timing_correction=False, wf_name='func_preproc_%d' % num_strat)
-                func_preproc.inputs.inputspec.start_idx = c.startIdx
-                func_preproc.inputs.inputspec.stop_idx = c.stopIdx
+                    workflow.connect(scan_params, 'start_indx',
+                                     func_preproc, 'inputspec.start_idx')
+                    workflow.connect(scan_params, 'stop_indx',
+                                     func_preproc, 'inputspec.stop_idx')
 
-                convert_tr.inputs.tr = c.TR
+                    workflow.connect(scan_params, 'tr',
+                                     convert_tr, 'tr')
+                else:
+                    func_preproc = create_func_preproc(slice_timing_correction=False, wf_name='func_preproc_automask_%d' % num_strat)
+                    func_preproc.inputs.inputspec.start_idx = c.startIdx
+                    func_preproc.inputs.inputspec.stop_idx = c.stopIdx
 
-            node = None
-            out_file = None
-            try:
-                node, out_file = strat.get_leaf_properties()
-                workflow.connect(node, out_file, func_preproc, 'inputspec.rest')
+                    convert_tr.inputs.tr = c.TR
 
-            except:
-                logConnectionError('Functional Preprocessing', num_strat, strat.get_resource_pool(), '0005')
+                node = None
+                out_file = None
+                try:
+                    node, out_file = strat.get_leaf_properties()
+                    workflow.connect(node, out_file, func_preproc, 'inputspec.rest')
+
+                except:
+                    logConnectionError('Functional Preprocessing', num_strat, strat.get_resource_pool(), '0005')
+                    num_strat += 1
+                    continue
+
+                if (0 in c.runFunctionalPreprocessing) or ('BET' in c.functionalMasking):
+                    # we are forking so create a new node
+                    tmp = strategy()
+                    tmp.resource_pool = dict(strat.resource_pool)
+                    tmp.leaf_node = (strat.leaf_node)
+                    tmp.leaf_out_file = str(strat.leaf_out_file)
+                    tmp.name = list(strat.name)
+                    strat = tmp
+                    new_strat_list.append(strat)
+
+                strat.append_name(func_preproc.name)
+
+                strat.set_leaf_properties(func_preproc, 'outputspec.preprocessed')
+
+                # add stuff to resource pool if we need it
+                if slice_timing:
+                    strat.update_resource_pool({'slice_timing_corrected': (func_preproc, 'outputspec.slice_time_corrected')})
+                strat.update_resource_pool({'mean_functional':(func_preproc, 'outputspec.example_func')})
+                strat.update_resource_pool({'functional_preprocessed_mask':(func_preproc, 'outputspec.preprocessed_mask')})
+                strat.update_resource_pool({'movement_parameters':(func_preproc, 'outputspec.movement_parameters')})
+                strat.update_resource_pool({'max_displacement':(func_preproc, 'outputspec.max_displacement')})
+                strat.update_resource_pool({'preprocessed':(func_preproc, 'outputspec.preprocessed')})
+                strat.update_resource_pool({'functional_brain_mask':(func_preproc, 'outputspec.mask')})
+                strat.update_resource_pool({'motion_correct':(func_preproc, 'outputspec.motion_correct')})
+                strat.update_resource_pool({'coordinate_transformation':(func_preproc, 'outputspec.oned_matrix_save')})
+
+
+                create_log_node(func_preproc, 'outputspec.preprocessed', num_strat)
                 num_strat += 1
-                continue
-
-            if 0 in c.runFunctionalPreprocessing:
-                # we are forking so create a new node
-                tmp = strategy()
-                tmp.resource_pool = dict(strat.resource_pool)
-                tmp.leaf_node = (strat.leaf_node)
-                tmp.leaf_out_file = str(strat.leaf_out_file)
-                tmp.name = list(strat.name)
-                strat = tmp
-                new_strat_list.append(strat)
-
-            strat.append_name(func_preproc.name)
-
-            strat.set_leaf_properties(func_preproc, 'outputspec.preprocessed')
-
-            # add stuff to resource pool if we need it
-            if slice_timing:
-                strat.update_resource_pool({'slice_timing_corrected': (func_preproc, 'outputspec.slice_time_corrected')})
-            strat.update_resource_pool({'mean_functional':(func_preproc, 'outputspec.example_func')})
-            strat.update_resource_pool({'functional_preprocessed_mask':(func_preproc, 'outputspec.preprocessed_mask')})
-            strat.update_resource_pool({'movement_parameters':(func_preproc, 'outputspec.movement_parameters')})
-            strat.update_resource_pool({'max_displacement':(func_preproc, 'outputspec.max_displacement')})
-            strat.update_resource_pool({'preprocessed':(func_preproc, 'outputspec.preprocessed')})
-            strat.update_resource_pool({'functional_brain_mask':(func_preproc, 'outputspec.mask')})
-            strat.update_resource_pool({'motion_correct':(func_preproc, 'outputspec.motion_correct')})
-
-
-            create_log_node(func_preproc, 'outputspec.preprocessed', num_strat)
-            num_strat += 1
 
             
+        strat_list += new_strat_list
+
+
+        new_strat_list = []
+            
+        for strat in strat_list:
+            
+            nodes = getNodeList(strat)
+            
+            if ('BET' in c.functionalMasking) and ('func_preproc_automask' not in nodes):
+
+                slice_timing = sub_dict.get('scan_parameters')
+                # a node which checks if scan _parameters are present for each scan
+                scan_params = pe.Node(util.Function(input_names=['subject',
+                                                                 'scan',
+                                                                 'subject_map',
+                                                                 'start_indx',
+                                                                 'stop_indx'],
+                                                   output_names=['tr',
+                                                                 'tpattern',
+                                                                 'ref_slice',
+                                                                 'start_indx',
+                                                                 'stop_indx'],
+                                                   function=get_scan_params),
+                                     name='scan_params_%d' % num_strat)
+
+                convert_tr = pe.Node(util.Function(input_names=['tr'],
+                                                   output_names=['tr'],
+                                                   function=get_tr),
+                                     name='convert_tr_%d' % num_strat)
+
+                # if scan parameters are available slice timing correction is
+                # turned on
+                if slice_timing:
+
+                    func_preproc = create_func_preproc(slice_timing_correction=True, \
+                                                       use_bet=True, \
+                                                       wf_name='func_preproc_bet_%d' % num_strat)
+
+                    # getting the scan parameters
+                    workflow.connect(funcFlow, 'outputspec.subject',
+                                     scan_params, 'subject')
+                    workflow.connect(funcFlow, 'outputspec.scan',
+                                     scan_params, 'scan')
+                    scan_params.inputs.subject_map = sub_dict
+                    scan_params.inputs.start_indx = c.startIdx
+                    scan_params.inputs.stop_indx = c.stopIdx
+
+                    # passing the slice timing correction parameters
+                    workflow.connect(scan_params, 'tr',
+                                     func_preproc, 'scan_params.tr')
+                    workflow.connect(scan_params, 'ref_slice',
+                                     func_preproc, 'scan_params.ref_slice')
+                    workflow.connect(scan_params, 'tpattern',
+                                     func_preproc, 'scan_params.acquisition')
+
+                    workflow.connect(scan_params, 'start_indx',
+                                     func_preproc, 'inputspec.start_idx')
+                    workflow.connect(scan_params, 'stop_indx',
+                                     func_preproc, 'inputspec.stop_idx')
+
+                    workflow.connect(scan_params, 'tr',
+                                     convert_tr, 'tr')
+                else:
+                    func_preproc = create_func_preproc(slice_timing_correction=False, \
+                                                       use_bet=True, \
+                                                       wf_name='func_preproc_bet_%d' % num_strat)
+                    func_preproc.inputs.inputspec.start_idx = c.startIdx
+                    func_preproc.inputs.inputspec.stop_idx = c.stopIdx
+
+                    convert_tr.inputs.tr = c.TR
+
+                node = None
+                out_file = None
+                try:
+                    node, out_file = strat.get_leaf_properties()
+                    workflow.connect(node, out_file, func_preproc, 'inputspec.rest')
+
+                except:
+                    logConnectionError('Functional Preprocessing', num_strat, strat.get_resource_pool(), '0005')
+                    num_strat += 1
+                    continue
+
+                if 0 in c.runFunctionalPreprocessing:
+                    # we are forking so create a new node
+                    tmp = strategy()
+                    tmp.resource_pool = dict(strat.resource_pool)
+                    tmp.leaf_node = (strat.leaf_node)
+                    tmp.leaf_out_file = str(strat.leaf_out_file)
+                    tmp.name = list(strat.name)
+                    strat = tmp
+                    new_strat_list.append(strat)
+
+                strat.append_name(func_preproc.name)
+
+                strat.set_leaf_properties(func_preproc, 'outputspec.preprocessed')
+
+                # add stuff to resource pool if we need it
+                if slice_timing:
+                    strat.update_resource_pool({'slice_timing_corrected': (func_preproc, 'outputspec.slice_time_corrected')})
+                strat.update_resource_pool({'mean_functional':(func_preproc, 'outputspec.example_func')})
+                strat.update_resource_pool({'functional_preprocessed_mask':(func_preproc, 'outputspec.preprocessed_mask')})
+                strat.update_resource_pool({'movement_parameters':(func_preproc, 'outputspec.movement_parameters')})
+                strat.update_resource_pool({'max_displacement':(func_preproc, 'outputspec.max_displacement')})
+                strat.update_resource_pool({'preprocessed':(func_preproc, 'outputspec.preprocessed')})
+                strat.update_resource_pool({'functional_brain_mask':(func_preproc, 'outputspec.mask')})
+                strat.update_resource_pool({'motion_correct':(func_preproc, 'outputspec.motion_correct')})
+                strat.update_resource_pool({'coordinate_transformation':(func_preproc, 'outputspec.oned_matrix_save')})
+
+
+                create_log_node(func_preproc, 'outputspec.preprocessed', num_strat)
+                num_strat += 1
+
+
     strat_list += new_strat_list
+
 
 
 
@@ -881,6 +1001,10 @@ def prep_workflow(sub_dict, c, strategies, run, pipeline_timing_info=None, p_nam
                 node, out_file = strat.get_node_from_resource_pool('functional_brain_mask')
                 workflow.connect(node, out_file,
                                  gen_motion_stats, 'inputspec.mask')
+
+                node, out_file = strat.get_node_from_resource_pool('coordinate_transformation')
+                workflow.connect(node, out_file,
+                                 gen_motion_stats, 'inputspec.oned_matrix_save')
 
             except:
                 logConnectionError('Generate Motion Statistics', num_strat, strat.get_resource_pool(), '0009')
@@ -1976,8 +2100,16 @@ def prep_workflow(sub_dict, c, strategies, run, pipeline_timing_info=None, p_nam
             
         if 'func_mni_fsl_warp' in nodes:
 
-            output_to_standard = pe.Node(interface=fsl.ApplyWarp(),
-                           name='%s_to_standard_%d' % (output_name, num_strat))
+            if c3d_mapNode == 0:
+
+                output_to_standard = pe.Node(interface=fsl.ApplyWarp(),
+                               name='%s_to_standard_%d' % (output_name, num_strat))
+
+            else:
+
+                output_to_standard = pe.MapNode(interface=fsl.ApplyWarp(),
+                               name='%s_to_standard_%d' % (output_name, num_strat), iterfield=['in_file'])              
+
 
             output_to_standard.inputs.ref_file = c.standard
 
@@ -2085,7 +2217,16 @@ def prep_workflow(sub_dict, c, strategies, run, pipeline_timing_info=None, p_nam
 
         if 1 in c.runRegisterFuncToMNI:
 
-            output_to_standard_smooth = output_smooth.clone('%s_to_standard_smooth_%d' % (output_name, num_strat))
+            if mapNode == 0:
+
+                output_to_standard_smooth = pe.Node(interface=fsl.MultiImageMaths(),
+                            name='%s_to_standard_smooth_%d' % (output_name, num_strat))
+
+            else:
+
+                output_to_standard_smooth = pe.MapNode(interface=fsl.MultiImageMaths(),
+                            name='%s_to_standard_smooth_%d' % (output_name, num_strat), iterfield=['in_file'])          
+
 
             try:
 
@@ -2577,7 +2718,7 @@ def prep_workflow(sub_dict, c, strategies, run, pipeline_timing_info=None, p_nam
         for strat in strat_list:
 
             if 0 in c.runZScoring:
-                output_to_standard('sca_roi', 'sca_roi_correlations', strat, num_strat, 1)
+                output_to_standard('sca_roi', 'sca_roi_correlations', strat, num_strat, 0)
             
             if 1 in c.runZScoring:
                 output_to_standard('sca_roi_Z', 'sca_roi_Z', strat, num_strat, 1)
@@ -2598,7 +2739,7 @@ def prep_workflow(sub_dict, c, strategies, run, pipeline_timing_info=None, p_nam
         for strat in strat_list:
 
             if 0 in c.runZScoring:
-                output_to_standard('sca_seed', 'sca_seed_correlations', strat, num_strat, 1)
+                output_to_standard('sca_seed', 'sca_seed_correlations', strat, num_strat, 0)
             
             if 1 in c.runZScoring:
                 output_to_standard('sca_seed_Z', 'sca_seed_Z', strat, num_strat, 1)
